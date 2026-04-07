@@ -278,14 +278,11 @@ function analyze(zoneData) {
 function assignEnterpriseSlots(results, slots) {
   if (!slots || slots <= 0) return results;
 
-  // Candidates: domains whose base recommendation is "business" (they'd benefit
-  // most from enterprise) or that are already on enterprise.
+  // Candidates: only domains whose base recommendation is "business" qualify
+  // for enterprise slots. Current enterprise domains with lower base
+  // recommendations (free/pro) should show as downgrade candidates.
   const candidates = results
-    .filter(
-      (r) =>
-        r.recommendedPlan === "business" ||
-        r.currentPlan === "enterprise"
-    )
+    .filter((r) => r.recommendedPlan === "business")
     .sort((a, b) => {
       // Primary: monthly requests descending
       if (b.monthlyRequests !== a.monthlyRequests)
@@ -300,27 +297,33 @@ function assignEnterpriseSlots(results, slots) {
   }
 
   return results.map((r) => {
-    if (!awarded.has(r.domain)) return r;
+    if (awarded.has(r.domain)) {
+      // Domain wins an enterprise slot
+      const currentIdx = planIndex(r.currentPlan);
+      const enterpriseIdx = planIndex("enterprise");
+      let status;
+      if (enterpriseIdx === currentIdx) {
+        status = "ok";
+      } else if (enterpriseIdx < currentIdx) {
+        status = "downgrade";
+      } else {
+        status = "upgrade";
+      }
 
-    const currentIdx = planIndex(r.currentPlan);
-    const enterpriseIdx = planIndex("enterprise");
-    let status;
-    if (enterpriseIdx === currentIdx) {
-      status = "ok";
-    } else if (enterpriseIdx < currentIdx) {
-      status = "downgrade";
-    } else {
-      status = "upgrade";
+      return {
+        ...r,
+        recommendedPlan: "enterprise",
+        recommendedPrice: 0, // covered by account-level enterprise agreement
+        status,
+        monthlySavings: r.currentPrice - 0,
+        enterpriseSlot: true,
+      };
     }
 
-    return {
-      ...r,
-      recommendedPlan: "enterprise",
-      recommendedPrice: 0, // covered by account-level enterprise agreement
-      status,
-      monthlySavings: r.currentPrice - 0,
-      enterpriseSlot: true,
-    };
+    // Domain did not win a slot — return base recommendation as-is.
+    // Enterprise domains whose base recommendation is lower will
+    // naturally show as "downgrade" from the analyze() step.
+    return r;
   });
 }
 
