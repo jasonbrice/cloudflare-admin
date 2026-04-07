@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const { listZones, collectZoneData, runPool } = require("./cloudflare");
@@ -7,13 +8,47 @@ const { analyze, assignEnterpriseSlots } = require("./analyzer");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const CACHE_FILE = path.join(__dirname, "..", "data", "analysis-cache.json");
 
 app.use(express.static(path.join(__dirname, "public")));
 
+// --- Cache helpers ---
+function loadCache() {
+  try {
+    if (!fs.existsSync(CACHE_FILE)) return null;
+    const raw = fs.readFileSync(CACHE_FILE, "utf8");
+    const cached = JSON.parse(raw);
+    if (!cached.results || !cached.timestamp) return null;
+    return cached;
+  } catch {
+    return null;
+  }
+}
+
+function saveCache(data) {
+  const dir = path.dirname(CACHE_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const payload = { ...data, timestamp: new Date().toISOString() };
+  fs.writeFileSync(CACHE_FILE, JSON.stringify(payload, null, 2));
+  return payload.timestamp;
+}
+
+// --- Routes ---
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+// Return cached data if available (non-SSE, fast)
+app.get("/api/cached", (_req, res) => {
+  const cached = loadCache();
+  if (cached) {
+    res.json(cached);
+  } else {
+    res.json({ results: null });
+  }
+});
+
+// Full refresh via SSE — always hits Cloudflare API
 app.get("/api/analyze", async (req, res) => {
   const days = parseInt(req.query.days, 10) || 30;
 
@@ -86,7 +121,10 @@ app.get("/api/analyze", async (req, res) => {
         ? assignEnterpriseSlots(results, enterpriseSlots)
         : results;
 
-    send("done", { results: finalResults, accounts, enterpriseSlots });
+    const payload = { results: finalResults, accounts, enterpriseSlots };
+    const timestamp = saveCache(payload);
+
+    send("done", { ...payload, timestamp });
   } catch (err) {
     send("error", { message: err.message });
   }
