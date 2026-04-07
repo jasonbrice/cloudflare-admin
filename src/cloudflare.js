@@ -29,7 +29,7 @@ async function getToken() {
   return _token;
 }
 
-function request(url, options = {}) {
+function requestOnce(url, options = {}) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const req = https.request(
@@ -55,6 +55,19 @@ function request(url, options = {}) {
     if (options.body) req.write(options.body);
     req.end();
   });
+}
+
+// Retry wrapper with 429 (rate limited) backoff
+async function request(url, options = {}, retries = 3) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const result = await requestOnce(url, options);
+    if (result.status === 429 && attempt < retries) {
+      const backoff = (attempt + 1) * 2000; // 2s, 4s, 6s
+      await delay(backoff);
+      continue;
+    }
+    return result;
+  }
 }
 
 async function apiGet(path) {
@@ -90,8 +103,25 @@ async function graphqlQuery(query, variables = {}) {
 }
 
 // Small delay to respect rate limits (1200 req / 5 min)
-function delay(ms = 250) {
+function delay(ms = 50) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Concurrency-limited pool: runs tasks with at most `limit` in parallel
+async function runPool(items, limit, fn) {
+  const results = new Array(items.length);
+  let nextIdx = 0;
+
+  async function worker() {
+    while (nextIdx < items.length) {
+      const idx = nextIdx++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
 }
 
 async function listZones() {
@@ -300,38 +330,22 @@ async function getZoneWorkersRoutes(zoneId) {
 }
 
 async function collectZoneData(zone, days = 30, onProgress) {
-  if (onProgress) onProgress(`Fetching analytics for ${zone.name}...`);
-  const analytics = await getZoneAnalytics(zone.id, days);
-  await delay();
+  if (onProgress) onProgress(`Analyzing ${zone.name}...`);
 
-  // Fetch cache data separately (gracefully fails to 0)
-  const cachedBytes = await getZoneCacheAnalytics(zone.id, days);
+  // Run all API calls for this zone in parallel — they are independent
+  const [analytics, cachedBytes, settings, firewall, certs, rateLimits, pageRules, workersRoutes] =
+    await Promise.all([
+      getZoneAnalytics(zone.id, days),
+      getZoneCacheAnalytics(zone.id, days),
+      getZoneSettings(zone.id),
+      getZoneFirewallRules(zone.id),
+      getZoneCustomCertificates(zone.id),
+      getZoneRateLimits(zone.id),
+      getZonePageRules(zone.id),
+      getZoneWorkersRoutes(zone.id),
+    ]);
+
   analytics.cachedBytes = cachedBytes;
-  await delay();
-
-  if (onProgress) onProgress(`Fetching settings for ${zone.name}...`);
-  const settings = await getZoneSettings(zone.id);
-  await delay();
-
-  if (onProgress) onProgress(`Fetching firewall rules for ${zone.name}...`);
-  const firewall = await getZoneFirewallRules(zone.id);
-  await delay();
-
-  if (onProgress) onProgress(`Fetching certificates for ${zone.name}...`);
-  const certs = await getZoneCustomCertificates(zone.id);
-  await delay();
-
-  if (onProgress) onProgress(`Fetching rate limits for ${zone.name}...`);
-  const rateLimits = await getZoneRateLimits(zone.id);
-  await delay();
-
-  if (onProgress) onProgress(`Fetching page rules for ${zone.name}...`);
-  const pageRules = await getZonePageRules(zone.id);
-  await delay();
-
-  if (onProgress) onProgress(`Fetching workers routes for ${zone.name}...`);
-  const workersRoutes = await getZoneWorkersRoutes(zone.id);
-  await delay();
 
   return {
     ...zone,
@@ -355,5 +369,6 @@ module.exports = {
   getZonePageRules,
   getZoneWorkersRoutes,
   collectZoneData,
+  runPool,
   getToken,
 };

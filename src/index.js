@@ -1,6 +1,6 @@
 require("dotenv").config();
 
-const { listZones, collectZoneData } = require("./cloudflare");
+const { listZones, collectZoneData, runPool } = require("./cloudflare");
 const { analyze, assignEnterpriseSlots } = require("./analyzer");
 const { formatTable, formatJson } = require("./formatter");
 
@@ -59,16 +59,16 @@ async function main() {
   }
   progress(`Found ${zones.length} zone(s), ${enterpriseSlots} enterprise slot(s). Collecting data...\n`);
 
-  const results = [];
-  for (let i = 0; i < zones.length; i++) {
-    const zone = zones[i];
-    progress(`[${i + 1}/${zones.length}] ${zone.name}`);
+  let completed = 0;
+  const results = await runPool(zones, 5, async (zone) => {
+    completed++;
+    progress(`[${completed}/${zones.length}] ${zone.name}`);
     try {
       const data = await collectZoneData(zone, args.days);
-      results.push(analyze(data));
+      return analyze(data);
     } catch (err) {
       process.stderr.write(`\nError processing ${zone.name}: ${err.message}\n`);
-      results.push({
+      return {
         domain: zone.name,
         currentPlan: zone.plan?.legacyId || "unknown",
         currentPrice: zone.plan?.price ?? 0,
@@ -87,9 +87,9 @@ async function main() {
         headroom: null,
         features: null,
         analysisDays: 0,
-      });
+      };
     }
-  }
+  });
 
   progress("");
 

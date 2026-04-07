@@ -2,7 +2,7 @@ require("dotenv").config();
 
 const path = require("path");
 const express = require("express");
-const { listZones, collectZoneData } = require("./cloudflare");
+const { listZones, collectZoneData, runPool } = require("./cloudflare");
 const { analyze, assignEnterpriseSlots } = require("./analyzer");
 
 const app = express();
@@ -44,21 +44,21 @@ app.get("/api/analyze", async (req, res) => {
       total: zones.length,
     });
 
-    const results = [];
-    for (let i = 0; i < zones.length; i++) {
-      const zone = zones[i];
+    let completed = 0;
+    const results = await runPool(zones, 5, async (zone) => {
+      completed++;
       send("progress", {
         phase: "analyze",
-        current: i + 1,
+        current: completed,
         total: zones.length,
         domain: zone.name,
       });
 
       try {
         const data = await collectZoneData(zone, days);
-        results.push(analyze(data));
+        return analyze(data);
       } catch (err) {
-        results.push({
+        return {
           domain: zone.name,
           currentPlan: zone.plan?.legacyId || "unknown",
           currentPrice: zone.plan?.price ?? 0,
@@ -77,9 +77,9 @@ app.get("/api/analyze", async (req, res) => {
           headroom: null,
           features: null,
           analysisDays: 0,
-        });
+        };
       }
-    }
+    });
 
     const finalResults =
       enterpriseSlots > 0
