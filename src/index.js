@@ -78,11 +78,15 @@ async function main() {
         monthlySavings: 0,
         trafficPlan: "unknown",
         featurePlan: "unknown",
+        trafficReasons: [],
         featureReasons: [`Error: ${err.message}`],
         monthlyRequests: 0,
         monthlyBandwidth: 0,
         uniqueVisitors: 0,
         cacheRatio: 0,
+        headroom: null,
+        features: null,
+        analysisDays: 0,
       });
     }
   }

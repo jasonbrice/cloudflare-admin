@@ -60,6 +60,52 @@
   .change-item button:hover { color: #e11d48; }
 
   .hidden { display: none !important; }
+
+  /* Detail Modal */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+  .modal { background: #fff; border-radius: 12px; width: 680px; max-width: 95vw; max-height: 90vh; overflow-y: auto; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+  .modal-header { padding: 20px 24px 12px; display: flex; justify-content: space-between; align-items: flex-start; }
+  .modal-header h2 { font-size: 20px; font-weight: 700; margin: 0; }
+  .modal-close { background: none; border: none; font-size: 24px; cursor: pointer; color: #999; padding: 0 4px; line-height: 1; }
+  .modal-close:hover { color: #333; }
+  .modal-body { padding: 0 24px 24px; }
+
+  .detail-plan-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; font-size: 14px; }
+  .detail-plan-badge { display: inline-block; padding: 3px 10px; border-radius: 6px; font-weight: 600; font-size: 13px; }
+  .detail-plan-badge.free { background: #f3f4f6; color: #374151; }
+  .detail-plan-badge.pro { background: #dbeafe; color: #1e40af; }
+  .detail-plan-badge.business { background: #ffedd5; color: #9a3412; }
+  .detail-plan-badge.enterprise { background: #ede9fe; color: #5b21b6; }
+  .detail-arrow { font-size: 18px; color: #2563eb; }
+  .detail-status { font-weight: 600; font-size: 13px; }
+  .detail-status.ok { color: #166534; }
+  .detail-status.downgrade { color: #854d0e; }
+  .detail-status.upgrade { color: #991b1b; }
+
+  .detail-section { margin-bottom: 18px; }
+  .detail-section h3 { font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+  .detail-section ul { list-style: none; padding: 0; }
+  .detail-section li { font-size: 13px; color: #555; padding: 3px 0; padding-left: 18px; position: relative; }
+  .detail-section li::before { content: "•"; position: absolute; left: 4px; color: #999; }
+
+  .headroom-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 13px; }
+  .headroom-label { width: 90px; font-weight: 500; color: #555; flex-shrink: 0; }
+  .headroom-bar-track { flex: 1; height: 14px; background: #f3f4f6; border-radius: 7px; position: relative; overflow: hidden; }
+  .headroom-bar-fill { height: 100%; border-radius: 7px; transition: width 0.3s; }
+  .headroom-bar-fill.green { background: #86efac; }
+  .headroom-bar-fill.yellow { background: #fde68a; }
+  .headroom-bar-fill.red { background: #fca5a5; }
+  .headroom-pct { width: 50px; text-align: right; font-weight: 600; flex-shrink: 0; }
+  .headroom-pct.green { color: #166534; }
+  .headroom-pct.yellow { color: #854d0e; }
+  .headroom-pct.red { color: #991b1b; }
+  .headroom-value { font-size: 12px; color: #888; width: 140px; flex-shrink: 0; }
+
+  .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; }
+  .feature-item { font-size: 13px; padding: 3px 0; display: flex; align-items: center; gap: 6px; }
+  .feature-icon { font-size: 14px; width: 18px; text-align: center; }
+  .feature-icon.on { color: #16a34a; }
+  .feature-icon.off { color: #d1d5db; }
 </style>
 </head>
 <body>
@@ -117,6 +163,16 @@
     <button id="btn-clear-pending" style="font-size:13px; padding:3px 10px; border:1px solid #d0d0d0; border-radius:5px; background:#fff; cursor:pointer;">Clear All</button>
   </h3>
   <div class="change-list" id="change-list"></div>
+</div>
+
+<div id="detail-modal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modal-title"></h2>
+      <button class="modal-close" id="modal-close-btn">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
 </div>
 
 <script>
@@ -245,6 +301,11 @@ function createCard(r) {
     card.classList.add("dragging");
   });
   card.addEventListener("dragend", () => card.classList.remove("dragging"));
+  card.addEventListener("click", (e) => {
+    // Don't open modal if user was dragging
+    if (card.classList.contains("dragging")) return;
+    showDetail(r);
+  });
 
   return card;
 }
@@ -335,6 +396,127 @@ document.getElementById("btn-clear-pending").addEventListener("click", () => {
   pendingChanges = {};
   renderAll();
   renderPending();
+});
+
+// --- Detail Modal ---
+function headroomColor(pct) {
+  if (pct > 85) return "red";
+  if (pct > 60) return "yellow";
+  return "green";
+}
+
+function showDetail(r) {
+  const modal = document.getElementById("detail-modal");
+  document.getElementById("modal-title").textContent = r.domain;
+
+  const statusLabel = r.status === "ok" ? "No change needed"
+    : r.status === "downgrade" ? "Downgrade recommended"
+    : r.status === "upgrade" ? "Upgrade recommended" : "Error";
+
+  let html = "";
+
+  // Plan row
+  html += `<div class="detail-plan-row">
+    <span class="detail-plan-badge ${r.currentPlan}">${capitalize(r.currentPlan)}</span>`;
+  if (r.recommendedPlan !== r.currentPlan && r.status !== "error") {
+    html += `<span class="detail-arrow">&rarr;</span>
+      <span class="detail-plan-badge ${r.recommendedPlan}">${capitalize(r.recommendedPlan)}</span>`;
+  }
+  html += `<span class="detail-status ${r.status}">${statusLabel}</span>`;
+  if (r.monthlySavings > 0) {
+    html += `<span style="font-size:13px; color:#166534; font-weight:600;">Save $${r.monthlySavings}/mo</span>`;
+  }
+  html += `</div>`;
+
+  // Analysis period
+  html += `<div style="font-size:12px; color:#888; margin-bottom:16px;">Based on ${r.analysisDays || 30}-day analysis period</div>`;
+
+  // Traffic Analysis
+  html += `<div class="detail-section"><h3>Traffic Analysis</h3>`;
+  if (r.trafficReasons && r.trafficReasons.length) {
+    html += `<ul>${r.trafficReasons.map(s => `<li>${escHtml(s)}</li>`).join("")}</ul>`;
+  } else {
+    html += `<ul><li>No traffic data available</li></ul>`;
+  }
+  html += `</div>`;
+
+  // Feature Requirements
+  html += `<div class="detail-section"><h3>Feature Requirements</h3>`;
+  if (r.featureReasons && r.featureReasons.length) {
+    html += `<ul>${r.featureReasons.map(s => `<li>${escHtml(s)}</li>`).join("")}</ul>`;
+  } else {
+    html += `<ul><li>No feature-based upgrade signals detected</li></ul>`;
+  }
+  html += `</div>`;
+
+  // Headroom
+  if (r.headroom) {
+    html += `<div class="detail-section"><h3>Tier Headroom</h3>`;
+
+    const dims = [
+      { key: "requests", label: "Requests", fmt: fmtNum, limitFmt: fmtNum },
+      { key: "bandwidth", label: "Bandwidth", fmt: fmtBytes, limitFmt: fmtBytes },
+      { key: "pageRules", label: "Page Rules", fmt: String, limitFmt: String },
+    ];
+
+    for (const d of dims) {
+      const h = r.headroom[d.key];
+      if (!h || h.limit === Infinity) continue;
+      const pct = Math.min(h.percent, 100);
+      const color = headroomColor(h.percent);
+      html += `<div class="headroom-row">
+        <span class="headroom-label">${d.label}</span>
+        <div class="headroom-bar-track">
+          <div class="headroom-bar-fill ${color}" style="width: ${pct}%"></div>
+        </div>
+        <span class="headroom-pct ${color}">${h.percent}%</span>
+        <span class="headroom-value">${d.fmt(h.current)} / ${d.limitFmt(h.limit)}</span>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Feature Checklist
+  if (r.features) {
+    html += `<div class="detail-section"><h3>Feature Inventory</h3><div class="feature-grid">`;
+
+    const featureItems = [
+      { label: "WAF", val: r.features.waf, display: r.features.waf ? "Enabled" : "Off" },
+      { label: "Firewall Rules", val: r.features.firewallRules > 0, display: String(r.features.firewallRules) },
+      { label: "Custom SSL", val: r.features.customSSL > 0, display: String(r.features.customSSL) },
+      { label: "Rate Limits", val: r.features.rateLimits > 0, display: String(r.features.rateLimits) },
+      { label: "Page Rules", val: r.features.pageRules > 0, display: String(r.features.pageRules) },
+      { label: "Workers Routes", val: r.features.workersRoutes > 0, display: String(r.features.workersRoutes) },
+      { label: "Polish", val: r.features.polish !== "off", display: r.features.polish },
+      { label: "Mirage", val: r.features.mirage, display: r.features.mirage ? "Enabled" : "Off" },
+      { label: "Under Attack", val: r.features.underAttack, display: r.features.underAttack ? "Active" : "Off" },
+    ];
+
+    for (const f of featureItems) {
+      const icon = f.val ? "✓" : "—";
+      const cls = f.val ? "on" : "off";
+      html += `<div class="feature-item">
+        <span class="feature-icon ${cls}">${icon}</span>
+        <span>${f.label}: <strong>${f.display}</strong></span>
+      </div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  document.getElementById("modal-body").innerHTML = html;
+  modal.classList.remove("hidden");
+}
+
+function closeModal() {
+  document.getElementById("detail-modal").classList.add("hidden");
+}
+
+document.getElementById("modal-close-btn").addEventListener("click", closeModal);
+document.getElementById("detail-modal").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeModal();
 });
 
 // --- Init ---

@@ -22,6 +22,18 @@ const TRAFFIC_THRESHOLDS = {
   },
 };
 
+// Page rule limits per plan
+const PAGE_RULE_LIMITS = {
+  free: 3,
+  pro: 20,
+  business: 50,
+  enterprise: 125,
+};
+
+// Cache discount factor: high cache ratios soften bandwidth-based upgrade signals.
+// 0.5 means a 90% cache ratio reduces effective bandwidth by 45%.
+const CACHE_DISCOUNT = 0.5;
+
 function planIndex(planId) {
   const normalized = normalizePlanId(planId);
   const idx = PLANS.indexOf(normalized);
@@ -37,31 +49,66 @@ function normalizePlanId(planId) {
   return "free";
 }
 
+function fmtBytes(b) {
+  if (b === 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(b) / Math.log(1024));
+  return (b / Math.pow(1024, i)).toFixed(1) + " " + u[i];
+}
+
+function fmtNum(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return String(n);
+}
+
 function recommendByTraffic(analytics) {
-  const { requests, bandwidth, days } = analytics;
+  const { requests, bandwidth, cachedBytes, days } = analytics;
 
   // Normalize to 30-day period
   const scale = days > 0 ? 30 / days : 1;
   const monthlyRequests = requests * scale;
   const monthlyBandwidth = bandwidth * scale;
+  const cacheRatio = bandwidth > 0 ? cachedBytes / bandwidth : 0;
 
+  // Apply cache discount to bandwidth assessment
+  const effectiveBandwidth = monthlyBandwidth * (1 - cacheRatio * CACHE_DISCOUNT);
+
+  const reasons = [];
+
+  // Request-based recommendation
   let trafficPlan = "free";
-
   if (monthlyRequests >= TRAFFIC_THRESHOLDS.requests.pro) {
     trafficPlan = "business";
+    reasons.push(`${fmtNum(monthlyRequests)} requests/mo exceeds Pro tier limit (${fmtNum(TRAFFIC_THRESHOLDS.requests.pro)})`);
   } else if (monthlyRequests >= TRAFFIC_THRESHOLDS.requests.free) {
     trafficPlan = "pro";
+    reasons.push(`${fmtNum(monthlyRequests)} requests/mo exceeds Free tier limit (${fmtNum(TRAFFIC_THRESHOLDS.requests.free)})`);
+  } else {
+    reasons.push(`${fmtNum(monthlyRequests)} requests/mo is within Free tier limit (${fmtNum(TRAFFIC_THRESHOLDS.requests.free)})`);
   }
 
+  // Bandwidth-based recommendation (using effective bandwidth)
   let bandwidthPlan = "free";
-  if (monthlyBandwidth >= TRAFFIC_THRESHOLDS.bandwidth.pro) {
+  if (effectiveBandwidth >= TRAFFIC_THRESHOLDS.bandwidth.pro) {
     bandwidthPlan = "business";
-  } else if (monthlyBandwidth >= TRAFFIC_THRESHOLDS.bandwidth.free) {
+    reasons.push(`${fmtBytes(monthlyBandwidth)} bandwidth/mo exceeds Pro tier limit (${fmtBytes(TRAFFIC_THRESHOLDS.bandwidth.pro)})`);
+  } else if (effectiveBandwidth >= TRAFFIC_THRESHOLDS.bandwidth.free) {
     bandwidthPlan = "pro";
+    reasons.push(`${fmtBytes(monthlyBandwidth)} bandwidth/mo exceeds Free tier limit (${fmtBytes(TRAFFIC_THRESHOLDS.bandwidth.free)})`);
+  } else {
+    reasons.push(`${fmtBytes(monthlyBandwidth)} bandwidth/mo is within Free tier limit (${fmtBytes(TRAFFIC_THRESHOLDS.bandwidth.free)})`);
+  }
+
+  // Cache ratio context
+  if (cacheRatio > 0.5) {
+    reasons.push(`${(cacheRatio * 100).toFixed(0)}% cache hit ratio reduces effective bandwidth load`);
   }
 
   // Take the higher of the two
-  return planIndex(bandwidthPlan) > planIndex(trafficPlan) ? bandwidthPlan : trafficPlan;
+  const plan = planIndex(bandwidthPlan) > planIndex(trafficPlan) ? bandwidthPlan : trafficPlan;
+  return { plan, reasons };
 }
 
 function recommendByFeatures(zoneData) {
@@ -92,6 +139,21 @@ function recommendByFeatures(zoneData) {
     requireAtLeast("pro", `${zoneData.rateLimits.count} rate limit rule(s)`);
   }
 
+  // Page rules — exceeding plan limits signals upgrade
+  const pageRuleCount = zoneData.pageRules?.count || 0;
+  if (pageRuleCount > PAGE_RULE_LIMITS.business) {
+    requireAtLeast("enterprise", `${pageRuleCount} page rules exceeds Business limit (${PAGE_RULE_LIMITS.business})`);
+  } else if (pageRuleCount > PAGE_RULE_LIMITS.pro) {
+    requireAtLeast("business", `${pageRuleCount} page rules exceeds Pro limit (${PAGE_RULE_LIMITS.pro})`);
+  } else if (pageRuleCount > PAGE_RULE_LIMITS.free) {
+    requireAtLeast("pro", `${pageRuleCount} page rules exceeds Free limit (${PAGE_RULE_LIMITS.free})`);
+  }
+
+  // Workers routes → Pro+
+  if (zoneData.workersRoutes?.count > 0) {
+    requireAtLeast("pro", `${zoneData.workersRoutes.count} Workers route(s) configured`);
+  }
+
   // Settings-based checks
   const settings = zoneData.settings || {};
 
@@ -113,9 +175,6 @@ function recommendByFeatures(zoneData) {
     requireAtLeast("pro", "Mirage (image lazy loading) enabled");
   }
 
-  // Minification (available on all plans, but heavy use suggests Pro)
-  // Not a hard requirement, skip
-
   return { requiredPlan, reasons };
 }
 
@@ -123,7 +182,7 @@ function analyze(zoneData) {
   const currentPlanId = normalizePlanId(zoneData.plan?.legacyId || zoneData.plan?.name);
   const currentIdx = planIndex(currentPlanId);
 
-  const trafficPlan = recommendByTraffic(zoneData.analytics);
+  const { plan: trafficPlan, reasons: trafficReasons } = recommendByTraffic(zoneData.analytics);
   const { requiredPlan: featurePlan, reasons: featureReasons } = recommendByFeatures(zoneData);
 
   // Take the max of traffic and feature recommendations
@@ -146,6 +205,48 @@ function analyze(zoneData) {
 
   // Normalize analytics to monthly for display
   const scale = zoneData.analytics.days > 0 ? 30 / zoneData.analytics.days : 1;
+  const monthlyRequests = Math.round(zoneData.analytics.requests * scale);
+  const monthlyBandwidth = Math.round(zoneData.analytics.bandwidth * scale);
+  const cacheRatio = zoneData.analytics.bandwidth > 0
+    ? zoneData.analytics.cachedBytes / zoneData.analytics.bandwidth
+    : 0;
+
+  // Headroom: how close is this domain to the next tier's limits?
+  const headroom = {
+    requests: {
+      current: monthlyRequests,
+      limit: TRAFFIC_THRESHOLDS.requests[recommendedPlan],
+      percent: TRAFFIC_THRESHOLDS.requests[recommendedPlan] === Infinity
+        ? 0
+        : Math.round((monthlyRequests / TRAFFIC_THRESHOLDS.requests[recommendedPlan]) * 100),
+    },
+    bandwidth: {
+      current: monthlyBandwidth,
+      limit: TRAFFIC_THRESHOLDS.bandwidth[recommendedPlan],
+      percent: TRAFFIC_THRESHOLDS.bandwidth[recommendedPlan] === Infinity
+        ? 0
+        : Math.round((monthlyBandwidth / TRAFFIC_THRESHOLDS.bandwidth[recommendedPlan]) * 100),
+    },
+    pageRules: {
+      current: zoneData.pageRules?.count || 0,
+      limit: PAGE_RULE_LIMITS[recommendedPlan],
+      percent: Math.round(((zoneData.pageRules?.count || 0) / PAGE_RULE_LIMITS[recommendedPlan]) * 100),
+    },
+  };
+
+  // Feature summary for the detail view
+  const settings = zoneData.settings || {};
+  const features = {
+    waf: settings.waf === "on",
+    firewallRules: zoneData.firewall?.count || 0,
+    customSSL: zoneData.customCertificates?.count || 0,
+    rateLimits: zoneData.rateLimits?.count || 0,
+    pageRules: zoneData.pageRules?.count || 0,
+    workersRoutes: zoneData.workersRoutes?.count || 0,
+    polish: settings.polish || "off",
+    mirage: settings.mirage === "on",
+    underAttack: settings.security_level === "under_attack",
+  };
 
   return {
     domain: zoneData.name,
@@ -157,14 +258,15 @@ function analyze(zoneData) {
     monthlySavings,
     trafficPlan,
     featurePlan,
+    trafficReasons,
     featureReasons,
-    monthlyRequests: Math.round(zoneData.analytics.requests * scale),
-    monthlyBandwidth: Math.round(zoneData.analytics.bandwidth * scale),
+    monthlyRequests,
+    monthlyBandwidth,
     uniqueVisitors: zoneData.analytics.uniqueVisitors,
-    cacheRatio:
-      zoneData.analytics.bandwidth > 0
-        ? zoneData.analytics.cachedBytes / zoneData.analytics.bandwidth
-        : 0,
+    cacheRatio,
+    headroom,
+    features,
+    analysisDays: zoneData.analytics.days,
   };
 }
 
@@ -222,4 +324,4 @@ function assignEnterpriseSlots(results, slots) {
   });
 }
 
-module.exports = { analyze, assignEnterpriseSlots, normalizePlanId, PLAN_PRICES, PLANS };
+module.exports = { analyze, assignEnterpriseSlots, normalizePlanId, PLAN_PRICES, PLANS, TRAFFIC_THRESHOLDS, PAGE_RULE_LIMITS };

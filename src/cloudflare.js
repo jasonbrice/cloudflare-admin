@@ -138,6 +138,7 @@ const ANALYTICS_QUERY = `
           count
           sum {
             edgeResponseBytes
+            cachedBytes
           }
         }
       }
@@ -178,7 +179,7 @@ async function getZoneAnalytics(zoneId, days = 30) {
       return {
         requests: g.count || 0,
         bandwidth: g.sum?.edgeResponseBytes || 0,
-        cachedBytes: 0,
+        cachedBytes: g.sum?.cachedBytes || 0,
         uniqueVisitors: 0,
         days: tryDays,
       };
@@ -241,6 +242,28 @@ async function getZoneRateLimits(zoneId) {
   }
 }
 
+async function getZonePageRules(zoneId) {
+  try {
+    const data = await apiGet(`/zones/${zoneId}/pagerules?per_page=1`);
+    return {
+      count: data.result_info?.total_count || 0,
+    };
+  } catch {
+    return { count: 0 };
+  }
+}
+
+async function getZoneWorkersRoutes(zoneId) {
+  try {
+    const data = await apiGet(`/zones/${zoneId}/workers/routes`);
+    return {
+      count: data.result?.length || 0,
+    };
+  } catch {
+    return { count: 0 };
+  }
+}
+
 async function collectZoneData(zone, days = 30, onProgress) {
   if (onProgress) onProgress(`Fetching analytics for ${zone.name}...`);
   const analytics = await getZoneAnalytics(zone.id, days);
@@ -262,6 +285,14 @@ async function collectZoneData(zone, days = 30, onProgress) {
   const rateLimits = await getZoneRateLimits(zone.id);
   await delay();
 
+  if (onProgress) onProgress(`Fetching page rules for ${zone.name}...`);
+  const pageRules = await getZonePageRules(zone.id);
+  await delay();
+
+  if (onProgress) onProgress(`Fetching workers routes for ${zone.name}...`);
+  const workersRoutes = await getZoneWorkersRoutes(zone.id);
+  await delay();
+
   return {
     ...zone,
     analytics,
@@ -269,6 +300,8 @@ async function collectZoneData(zone, days = 30, onProgress) {
     firewall,
     customCertificates: certs,
     rateLimits,
+    pageRules,
+    workersRoutes,
   };
 }
 
@@ -279,6 +312,8 @@ module.exports = {
   getZoneFirewallRules,
   getZoneCustomCertificates,
   getZoneRateLimits,
+  getZonePageRules,
+  getZoneWorkersRoutes,
   collectZoneData,
   getToken,
 };
