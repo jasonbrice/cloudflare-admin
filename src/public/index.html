@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cloudflare Domain Plan Analyzer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #1a1a1a; }
+
+  header { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  header h1 { font-size: 20px; font-weight: 600; }
+  .header-stats { display: flex; gap: 24px; font-size: 14px; color: #555; }
+  .header-stats span { display: flex; align-items: center; gap: 6px; }
+
+  .toolbar { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 10px 24px; display: flex; align-items: center; gap: 16px; }
+  .toolbar input[type="text"] { padding: 6px 12px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 14px; width: 240px; }
+  .toolbar select { padding: 6px 10px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 14px; }
+  .toolbar button { padding: 6px 14px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 14px; background: #fff; cursor: pointer; }
+  .toolbar button:hover { background: #f5f5f5; }
+  .toolbar button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .toolbar button.primary:hover { background: #1d4ed8; }
+
+  #loading { text-align: center; padding: 80px 24px; }
+  #loading .bar-container { width: 400px; max-width: 100%; height: 8px; background: #e0e0e0; border-radius: 4px; margin: 16px auto; overflow: hidden; }
+  #loading .bar { height: 100%; background: #2563eb; border-radius: 4px; transition: width 0.2s; width: 0%; }
+  #loading .status { font-size: 14px; color: #666; margin-top: 8px; }
+
+  .columns { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; padding: 24px; min-height: 400px; }
+  .plan-column { background: #fff; border-radius: 10px; border: 2px solid transparent; padding: 0; display: flex; flex-direction: column; min-height: 300px; transition: border-color 0.15s; }
+  .plan-column.drag-over { border-color: #2563eb; background: #f0f7ff; }
+  .plan-column-header { padding: 14px 16px; border-radius: 8px 8px 0 0; font-weight: 600; font-size: 15px; display: flex; justify-content: space-between; align-items: center; }
+  .plan-column-header .count { font-weight: 400; font-size: 13px; opacity: 0.8; }
+  .plan-column[data-plan="free"] .plan-column-header { background: #f3f4f6; color: #374151; }
+  .plan-column[data-plan="pro"] .plan-column-header { background: #dbeafe; color: #1e40af; }
+  .plan-column[data-plan="business"] .plan-column-header { background: #ffedd5; color: #9a3412; }
+  .plan-column[data-plan="enterprise"] .plan-column-header { background: #ede9fe; color: #5b21b6; }
+  .plan-column-body { padding: 8px; flex: 1; overflow-y: auto; max-height: 70vh; }
+
+  .domain-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; cursor: grab; transition: box-shadow 0.15s, opacity 0.15s; user-select: none; }
+  .domain-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .domain-card.dragging { opacity: 0.4; }
+  .domain-card .domain-name { font-weight: 600; font-size: 13px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .domain-card .domain-stats { font-size: 12px; color: #666; display: flex; gap: 12px; }
+  .domain-card .domain-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
+  .badge-ok { background: #dcfce7; color: #166534; }
+  .badge-downgrade { background: #fef9c3; color: #854d0e; }
+  .badge-upgrade { background: #fee2e2; color: #991b1b; }
+  .badge-error { background: #f3f4f6; color: #6b7280; }
+  .badge-moved { background: #dbeafe; color: #1e40af; }
+  .domain-card .recommend { font-size: 11px; color: #888; margin-top: 3px; }
+
+  #pending { background: #fff; border-top: 1px solid #e0e0e0; padding: 16px 24px; display: none; }
+  #pending.has-changes { display: block; }
+  #pending h3 { font-size: 15px; font-weight: 600; margin-bottom: 10px; display: flex; align-items: center; gap: 12px; }
+  #pending .change-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .change-item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 4px 10px; }
+  .change-item .arrow { color: #2563eb; }
+  .change-item button { background: none; border: none; cursor: pointer; color: #999; font-size: 16px; padding: 0 2px; }
+  .change-item button:hover { color: #e11d48; }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Cloudflare Domain Plan Analyzer</h1>
+  <div class="header-stats">
+    <span id="stat-total"></span>
+    <span id="stat-enterprise"></span>
+    <span id="stat-savings"></span>
+  </div>
+</header>
+
+<div class="toolbar" id="toolbar" style="display:none;">
+  <input type="text" id="search" placeholder="Search domains...">
+  <label>Sort by:
+    <select id="sort">
+      <option value="name">Name</option>
+      <option value="requests">Requests</option>
+      <option value="bandwidth">Bandwidth</option>
+    </select>
+  </label>
+  <button id="btn-refresh" class="primary">Refresh Data</button>
+  <button id="btn-reset">Reset Changes</button>
+</div>
+
+<div id="loading">
+  <h2>Loading domain data...</h2>
+  <div class="bar-container"><div class="bar" id="progress-bar"></div></div>
+  <div class="status" id="progress-status">Connecting...</div>
+</div>
+
+<div class="columns hidden" id="columns">
+  <div class="plan-column" data-plan="free">
+    <div class="plan-column-header">Free <span class="count" data-count></span></div>
+    <div class="plan-column-body" data-body></div>
+  </div>
+  <div class="plan-column" data-plan="pro">
+    <div class="plan-column-header">Pro — $20/mo <span class="count" data-count></span></div>
+    <div class="plan-column-body" data-body></div>
+  </div>
+  <div class="plan-column" data-plan="business">
+    <div class="plan-column-header">Business — $200/mo <span class="count" data-count></span></div>
+    <div class="plan-column-body" data-body></div>
+  </div>
+  <div class="plan-column" data-plan="enterprise">
+    <div class="plan-column-header">Enterprise <span class="count" data-count></span></div>
+    <div class="plan-column-body" data-body></div>
+  </div>
+</div>
+
+<div id="pending">
+  <h3>
+    Pending Changes
+    <button id="btn-clear-pending" style="font-size:13px; padding:3px 10px; border:1px solid #d0d0d0; border-radius:5px; background:#fff; cursor:pointer;">Clear All</button>
+  </h3>
+  <div class="change-list" id="change-list"></div>
+</div>
+
+<script>
+const PLAN_PRICES = { free: 0, pro: 20, business: 200, enterprise: 0 };
+let allResults = [];
+let pendingChanges = {}; // domain -> { from, to }
+let enterpriseSlots = 0;
+
+// --- Formatting ---
+function fmtBytes(b) {
+  if (b === 0) return "0 B";
+  const u = ["B","KB","MB","GB","TB"];
+  const i = Math.floor(Math.log(b) / Math.log(1024));
+  return (b / Math.pow(1024, i)).toFixed(1) + " " + u[i];
+}
+function fmtNum(n) {
+  if (n >= 1e9) return (n/1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n/1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n/1e3).toFixed(1) + "K";
+  return String(n);
+}
+
+// --- Data loading via SSE ---
+function loadData() {
+  document.getElementById("loading").classList.remove("hidden");
+  document.getElementById("columns").classList.add("hidden");
+  document.getElementById("toolbar").style.display = "none";
+  pendingChanges = {};
+  renderPending();
+
+  const es = new EventSource("/api/analyze");
+
+  es.addEventListener("progress", (e) => {
+    const d = JSON.parse(e.data);
+    const bar = document.getElementById("progress-bar");
+    const status = document.getElementById("progress-status");
+    if (d.total && d.current) {
+      bar.style.width = Math.round((d.current / d.total) * 100) + "%";
+      status.textContent = `[${d.current}/${d.total}] ${d.domain || ""}`;
+    } else {
+      status.textContent = d.message || "";
+    }
+  });
+
+  es.addEventListener("done", (e) => {
+    es.close();
+    const d = JSON.parse(e.data);
+    allResults = d.results;
+    enterpriseSlots = d.enterpriseSlots || 0;
+    document.getElementById("loading").classList.add("hidden");
+    document.getElementById("columns").classList.remove("hidden");
+    document.getElementById("toolbar").style.display = "flex";
+    renderAll();
+  });
+
+  es.addEventListener("error", (e) => {
+    es.close();
+    document.getElementById("progress-status").textContent = "Error loading data. Check server logs.";
+  });
+}
+
+// --- Rendering ---
+function getEffectivePlan(r) {
+  return pendingChanges[r.domain]?.to || r.currentPlan;
+}
+
+function renderAll() {
+  const search = document.getElementById("search").value.toLowerCase();
+  const sortBy = document.getElementById("sort").value;
+
+  const filtered = allResults.filter(r => !search || r.domain.toLowerCase().includes(search));
+
+  const byPlan = { free: [], pro: [], business: [], enterprise: [] };
+  for (const r of filtered) {
+    const plan = getEffectivePlan(r);
+    if (byPlan[plan]) byPlan[plan].push(r);
+    else byPlan.free.push(r); // fallback
+  }
+
+  // Sort
+  const sortFn = sortBy === "requests" ? (a,b) => b.monthlyRequests - a.monthlyRequests
+    : sortBy === "bandwidth" ? (a,b) => b.monthlyBandwidth - a.monthlyBandwidth
+    : (a,b) => a.domain.localeCompare(b.domain);
+
+  for (const plan of Object.keys(byPlan)) {
+    byPlan[plan].sort(sortFn);
+    const col = document.querySelector(`.plan-column[data-plan="${plan}"]`);
+    col.querySelector("[data-count]").textContent = `(${byPlan[plan].length})`;
+    const body = col.querySelector("[data-body]");
+    body.innerHTML = "";
+    for (const r of byPlan[plan]) {
+      body.appendChild(createCard(r));
+    }
+  }
+
+  updateStats();
+}
+
+function createCard(r) {
+  const card = document.createElement("div");
+  card.className = "domain-card";
+  card.draggable = true;
+  card.dataset.domain = r.domain;
+
+  const moved = !!pendingChanges[r.domain];
+  let badgeClass = "badge-" + r.status;
+  let badgeText = r.status === "ok" ? "OK" : r.status === "downgrade" ? "DOWNGRADE" : r.status === "upgrade" ? "UPGRADE" : "ERROR";
+  if (moved) { badgeClass = "badge-moved"; badgeText = "MOVED"; }
+
+  let recommend = "";
+  if (!moved && r.recommendedPlan !== r.currentPlan && r.status !== "error") {
+    recommend = `<div class="recommend">Recommended: ${capitalize(r.recommendedPlan)}</div>`;
+  }
+
+  card.innerHTML = `
+    <div class="domain-name">${escHtml(r.domain)}<span class="domain-badge ${badgeClass}">${badgeText}</span></div>
+    <div class="domain-stats">
+      <span>${fmtNum(r.monthlyRequests)} req/mo</span>
+      <span>${fmtBytes(r.monthlyBandwidth)}/mo</span>
+    </div>
+    ${recommend}
+  `;
+
+  card.addEventListener("dragstart", (e) => {
+    e.dataTransfer.setData("text/plain", r.domain);
+    card.classList.add("dragging");
+  });
+  card.addEventListener("dragend", () => card.classList.remove("dragging"));
+
+  return card;
+}
+
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+function escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+// --- Drag & Drop ---
+document.querySelectorAll(".plan-column").forEach(col => {
+  col.addEventListener("dragover", (e) => { e.preventDefault(); col.classList.add("drag-over"); });
+  col.addEventListener("dragleave", () => col.classList.remove("drag-over"));
+  col.addEventListener("drop", (e) => {
+    e.preventDefault();
+    col.classList.remove("drag-over");
+    const domain = e.dataTransfer.getData("text/plain");
+    const targetPlan = col.dataset.plan;
+    const r = allResults.find(x => x.domain === domain);
+    if (!r) return;
+
+    if (targetPlan === r.currentPlan) {
+      // Moved back to original — remove pending change
+      delete pendingChanges[domain];
+    } else {
+      pendingChanges[domain] = { from: r.currentPlan, to: targetPlan };
+    }
+    renderAll();
+    renderPending();
+  });
+});
+
+// --- Pending Changes ---
+function renderPending() {
+  const panel = document.getElementById("pending");
+  const list = document.getElementById("change-list");
+  const entries = Object.entries(pendingChanges);
+
+  if (entries.length === 0) {
+    panel.classList.remove("has-changes");
+    return;
+  }
+  panel.classList.add("has-changes");
+
+  list.innerHTML = "";
+  for (const [domain, change] of entries) {
+    const item = document.createElement("span");
+    item.className = "change-item";
+    item.innerHTML = `${escHtml(domain)}: ${capitalize(change.from)} <span class="arrow">&rarr;</span> ${capitalize(change.to)} <button data-domain="${escHtml(domain)}" title="Undo">&times;</button>`;
+    item.querySelector("button").addEventListener("click", () => {
+      delete pendingChanges[domain];
+      renderAll();
+      renderPending();
+    });
+    list.appendChild(item);
+  }
+}
+
+function updateStats() {
+  const total = allResults.length;
+  const entCount = allResults.filter(r => getEffectivePlan(r) === "enterprise").length;
+
+  // Calculate savings from pending changes
+  let savingsDelta = 0;
+  for (const [domain, change] of Object.entries(pendingChanges)) {
+    const oldPrice = PLAN_PRICES[change.from] || 0;
+    const newPrice = PLAN_PRICES[change.to] || 0;
+    savingsDelta += oldPrice - newPrice;
+  }
+
+  document.getElementById("stat-total").textContent = `${total} domains`;
+  document.getElementById("stat-enterprise").textContent = `Enterprise: ${entCount}/${enterpriseSlots} slots`;
+  document.getElementById("stat-savings").textContent = savingsDelta > 0
+    ? `Pending savings: $${savingsDelta}/mo`
+    : savingsDelta < 0
+      ? `Pending cost increase: +$${Math.abs(savingsDelta)}/mo`
+      : "";
+}
+
+// --- Controls ---
+document.getElementById("search").addEventListener("input", renderAll);
+document.getElementById("sort").addEventListener("change", renderAll);
+document.getElementById("btn-refresh").addEventListener("click", loadData);
+document.getElementById("btn-reset").addEventListener("click", () => {
+  pendingChanges = {};
+  renderAll();
+  renderPending();
+});
+document.getElementById("btn-clear-pending").addEventListener("click", () => {
+  pendingChanges = {};
+  renderAll();
+  renderPending();
+});
+
+// --- Init ---
+loadData();
+</script>
+</body>
+</html>
