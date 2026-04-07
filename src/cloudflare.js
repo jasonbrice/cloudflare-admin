@@ -138,7 +138,6 @@ const ANALYTICS_QUERY = `
           count
           sum {
             edgeResponseBytes
-            cachedBytes
           }
         }
       }
@@ -179,21 +178,57 @@ async function getZoneAnalytics(zoneId, days = 30) {
       return {
         requests: g.count || 0,
         bandwidth: g.sum?.edgeResponseBytes || 0,
-        cachedBytes: g.sum?.cachedBytes || 0,
+        cachedBytes: 0, // populated by separate cache query
         uniqueVisitors: 0,
         days: tryDays,
       };
     } catch (err) {
       // If the error is about time range, try a shorter window
-      if (err.message.includes("time range") && tryDays !== trialDays[trialDays.length - 1]) {
+      if (tryDays !== trialDays[trialDays.length - 1]) {
         continue;
       }
-      throw err;
+      // All attempts failed — return zeros rather than throwing
+      return { requests: 0, bandwidth: 0, cachedBytes: 0, uniqueVisitors: 0, days: 1 };
     }
   }
 
   // All ranges failed — return zeros
   return { requests: 0, bandwidth: 0, cachedBytes: 0, uniqueVisitors: 0, days: 1 };
+}
+
+// Separate cache query using httpRequests1dGroups which supports cachedBytes
+const CACHE_QUERY = `
+  query ZoneCacheAnalytics($zoneTag: string!, $dateStart: Date!, $dateEnd: Date!) {
+    viewer {
+      zones(filter: { zoneTag: $zoneTag }) {
+        httpRequests1dGroups(
+          filter: { date_geq: $dateStart, date_leq: $dateEnd }
+          limit: 1
+        ) {
+          sum {
+            cachedBytes
+          }
+        }
+      }
+    }
+  }
+`;
+
+async function getZoneCacheAnalytics(zoneId, days = 30) {
+  try {
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const dateEnd = yesterday.toISOString().split("T")[0];
+    const since = new Date(yesterday.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+    const dateStart = since.toISOString().split("T")[0];
+
+    const data = await graphqlQuery(CACHE_QUERY, { zoneTag: zoneId, dateStart, dateEnd });
+    const groups = data?.viewer?.zones?.[0]?.httpRequests1dGroups;
+    if (!groups?.length) return 0;
+    return groups[0].sum?.cachedBytes || 0;
+  } catch {
+    return 0;
+  }
 }
 
 async function getZoneSettings(zoneId) {
@@ -267,6 +302,11 @@ async function getZoneWorkersRoutes(zoneId) {
 async function collectZoneData(zone, days = 30, onProgress) {
   if (onProgress) onProgress(`Fetching analytics for ${zone.name}...`);
   const analytics = await getZoneAnalytics(zone.id, days);
+  await delay();
+
+  // Fetch cache data separately (gracefully fails to 0)
+  const cachedBytes = await getZoneCacheAnalytics(zone.id, days);
+  analytics.cachedBytes = cachedBytes;
   await delay();
 
   if (onProgress) onProgress(`Fetching settings for ${zone.name}...`);
