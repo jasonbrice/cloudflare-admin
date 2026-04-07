@@ -129,6 +129,7 @@
     </select>
   </label>
   <span id="data-timestamp" style="font-size:12px; color:#888; margin-left:auto;"></span>
+  <button id="btn-export-all">Export All</button>
   <button id="btn-refresh" class="primary">Refresh Data</button>
   <button id="btn-reset">Reset Changes</button>
 </div>
@@ -161,6 +162,7 @@
 <div id="pending">
   <h3>
     Pending Changes
+    <button id="btn-export-changes" style="font-size:13px; padding:3px 10px; border:1px solid #d0d0d0; border-radius:5px; background:#fff; cursor:pointer;">Export Changes</button>
     <button id="btn-clear-pending" style="font-size:13px; padding:3px 10px; border:1px solid #d0d0d0; border-radius:5px; background:#fff; cursor:pointer;">Clear All</button>
   </h3>
   <div class="change-list" id="change-list"></div>
@@ -429,9 +431,91 @@ function updateStats() {
       : "";
 }
 
+// --- CSV Export ---
+function csvEscape(val) {
+  const s = String(val ?? "");
+  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+function downloadCsv(filename, headers, rows) {
+  const lines = [headers.map(csvEscape).join(",")];
+  for (const row of rows) {
+    lines.push(row.map(csvEscape).join(","));
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportAll() {
+  const headers = [
+    "Domain", "Current Plan", "Recommended Plan", "Status",
+    "Monthly Requests", "Monthly Bandwidth",
+    "Cache Hit Ratio", "Current Price", "Recommended Price", "Monthly Savings",
+    "Traffic Reasoning", "Feature Reasoning",
+    "WAF", "Firewall Rules", "Custom SSL", "Rate Limits",
+    "Page Rules", "Workers Routes", "Polish", "Mirage", "Under Attack"
+  ];
+  const rows = allResults.map(r => [
+    r.domain, capitalize(r.currentPlan), capitalize(r.recommendedPlan), r.status,
+    r.monthlyRequests, fmtBytes(r.monthlyBandwidth),
+    (r.cacheRatio * 100).toFixed(1) + "%",
+    "$" + (r.currentPrice ?? 0), "$" + (r.recommendedPrice ?? 0),
+    "$" + (r.monthlySavings ?? 0),
+    (r.trafficReasons || []).join("; "),
+    (r.featureReasons || []).join("; "),
+    r.features?.waf ? "Yes" : "No",
+    r.features?.firewallRules ?? 0,
+    r.features?.customSSL ?? 0,
+    r.features?.rateLimits ?? 0,
+    r.features?.pageRules ?? 0,
+    r.features?.workersRoutes ?? 0,
+    r.features?.polish ?? "off",
+    r.features?.mirage ? "Yes" : "No",
+    r.features?.underAttack ? "Yes" : "No",
+  ]);
+
+  const date = new Date().toISOString().split("T")[0];
+  downloadCsv(`cloudflare-analysis-${date}.csv`, headers, rows);
+}
+
+function exportChanges() {
+  const entries = Object.entries(pendingChanges);
+  if (entries.length === 0) return;
+
+  const headers = [
+    "Domain", "Current Plan", "Proposed Plan",
+    "Current Price", "Proposed Price", "Monthly Savings",
+    "Reasoning"
+  ];
+  const rows = entries.map(([domain, change]) => {
+    const r = allResults.find(x => x.domain === domain);
+    const fromPrice = PLAN_PRICES[change.from] || 0;
+    const toPrice = PLAN_PRICES[change.to] || 0;
+    const reasons = [...(r?.trafficReasons || []), ...(r?.featureReasons || [])];
+    return [
+      domain, capitalize(change.from), capitalize(change.to),
+      "$" + fromPrice, "$" + toPrice, "$" + (fromPrice - toPrice),
+      reasons.join("; "),
+    ];
+  });
+
+  const date = new Date().toISOString().split("T")[0];
+  downloadCsv(`cloudflare-changes-${date}.csv`, headers, rows);
+}
+
 // --- Controls ---
 document.getElementById("search").addEventListener("input", renderAll);
 document.getElementById("sort").addEventListener("change", renderAll);
+document.getElementById("btn-export-all").addEventListener("click", exportAll);
+document.getElementById("btn-export-changes").addEventListener("click", exportChanges);
 document.getElementById("btn-refresh").addEventListener("click", fullRefresh);
 document.getElementById("btn-reset").addEventListener("click", () => {
   pendingChanges = {};
