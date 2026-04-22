@@ -34,6 +34,21 @@ const PAGE_RULE_LIMITS = {
 // 0.5 means a 90% cache ratio reduces effective bandwidth by 45%.
 const CACHE_DISCOUNT = 0.5;
 
+// Recommendation strength weights. Scores are 0–100; components are added and
+// clamped. Tune to reshape how aggressively the UI surfaces upgrade/downgrade
+// candidates. The activity component uses a continuous log scale so domains
+// with e.g. 10 req/mo vs 100K req/mo produce meaningfully different scores
+// even when both are clearly under-utilizing the current plan.
+const SCORE_WEIGHTS = {
+  tierGap: 20,         // per tier of difference — smaller so other signals differentiate
+  bothSignalsAgree: 15, // upgrade bonus when traffic AND features both point up
+  overage: 25,         // upgrade bonus for being well past current plan's ceiling
+  featureIntensity: 10, // upgrade bonus for heavy feature usage
+  inactivity: 40,      // downgrade bonus — continuous, higher = less activity
+  noFeatures: 10,      // downgrade bonus when no advanced features are in use
+  savings: 10,         // downgrade bonus for larger monthly savings
+};
+
 function planIndex(planId) {
   const normalized = normalizePlanId(planId);
   const idx = PLANS.indexOf(normalized);
@@ -178,6 +193,101 @@ function recommendByFeatures(zoneData) {
   return { requiredPlan, reasons };
 }
 
+// Count meaningful features in use. Used as a tiebreaker — domains with more
+// features in play are weaker downgrade candidates and stronger upgrade signals.
+function featureIntensity(result) {
+  const f = result.features || {};
+  return (
+    (f.waf ? 1 : 0) +
+    (f.firewallRules > 0 ? 1 : 0) +
+    (f.customSSL > 0 ? 1 : 0) +
+    (f.rateLimits > 0 ? 1 : 0) +
+    ((f.pageRules || 0) > 3 ? 1 : 0) +
+    (f.workersRoutes > 0 ? 1 : 0) +
+    (f.polish && f.polish !== "off" ? 1 : 0) +
+    (f.mirage ? 1 : 0) +
+    (f.underAttack ? 1 : 0)
+  );
+}
+
+// Continuous activity magnitude on a log scale. Returns a unitless number that
+// grows as the domain uses more of Cloudflare's bandwidth/request capacity.
+// A quiet domain (tens of req/mo, tiny bandwidth) → near 0.
+// A busy domain (1M req + 1GB/mo) → around 8.
+// Enterprise-scale domains (tens of M req + hundreds of GB) → 12+.
+function activityMagnitude(result) {
+  const reqs = Math.max(1, result.monthlyRequests || 0);
+  const bwMB = Math.max(1, (result.monthlyBandwidth || 0) / 1e6);
+  return Math.log10(reqs) + Math.log10(bwMB) * 0.5;
+}
+
+// Strength score (0–100) for how compelling an upgrade/downgrade recommendation
+// is. "ok" always scores 0 so it sorts to the bottom on a strength-sorted view.
+// The downgrade side uses a continuous log-scale activity component so that
+// low-traffic domains spread across the top of the score range (useful when
+// pruning a large pool of enterprise slots) rather than clustering at 100.
+function computeScore(result) {
+  if (result.status === "ok" || result.status === "error") return 0;
+
+  const currentIdx = planIndex(result.currentPlan);
+  const recIdx = planIndex(result.recommendedPlan);
+  const tierGap = Math.abs(recIdx - currentIdx);
+
+  let score = tierGap * SCORE_WEIGHTS.tierGap;
+
+  if (result.status === "upgrade") {
+    // Traffic and features both point up → strong confirmation
+    if (planIndex(result.trafficPlan) > currentIdx && planIndex(result.featurePlan) > currentIdx) {
+      score += SCORE_WEIGHTS.bothSignalsAgree;
+    }
+
+    // Continuous overage against the current plan's ceiling
+    const reqLimit = TRAFFIC_THRESHOLDS.requests[result.currentPlan];
+    const bwLimit = TRAFFIC_THRESHOLDS.bandwidth[result.currentPlan];
+    let overageLog = 0;
+    if (reqLimit !== Infinity && reqLimit > 0 && result.monthlyRequests > reqLimit) {
+      overageLog = Math.max(overageLog, Math.log2(result.monthlyRequests / reqLimit));
+    }
+    if (bwLimit !== Infinity && bwLimit > 0 && result.monthlyBandwidth > bwLimit) {
+      overageLog = Math.max(overageLog, Math.log2(result.monthlyBandwidth / bwLimit));
+    }
+    // 1x over → 0, 2x → 5, 4x → 10, 8x → 15, 16x → 20, 32x+ → 25
+    score += Math.min(SCORE_WEIGHTS.overage, overageLog * 5);
+
+    // Feature-driven pressure (multiple advanced features in play)
+    const fi = featureIntensity(result);
+    score += Math.min(SCORE_WEIGHTS.featureIntensity, fi * 2);
+  } else if (result.status === "downgrade") {
+    // Continuous activity-based inactivity bonus. Near-zero activity → full
+    // bonus; heavy activity → none. Calibrated so an empty domain maxes out
+    // and a domain doing 1M req + 1GB/mo gets roughly half the bonus.
+    const activity = activityMagnitude(result);
+    // activity=0 → full 40; activity=8 → 8; activity=10 → 0
+    const inactivityBonus = Math.max(0, SCORE_WEIGHTS.inactivity - activity * 4);
+    score += inactivityBonus;
+
+    // No advanced features in use → stronger downgrade signal
+    const fi = featureIntensity(result);
+    if (fi === 0) score += SCORE_WEIGHTS.noFeatures;
+    else if (fi <= 2) score += SCORE_WEIGHTS.noFeatures * 0.5;
+
+    // Savings magnitude (smaller weight now — mostly a tiebreaker)
+    const savings = result.monthlySavings || 0;
+    if (savings >= 200) score += SCORE_WEIGHTS.savings;
+    else if (savings >= 20) score += SCORE_WEIGHTS.savings * 0.5;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function scoreLabel(score) {
+  if (score >= 85) return "critical";
+  if (score >= 65) return "strong";
+  if (score >= 40) return "moderate";
+  if (score > 0) return "weak";
+  return "";
+}
+
 function analyze(zoneData) {
   const currentPlanId = normalizePlanId(zoneData.plan?.legacyId || zoneData.plan?.name);
   const currentIdx = planIndex(currentPlanId);
@@ -248,7 +358,7 @@ function analyze(zoneData) {
     underAttack: settings.security_level === "under_attack",
   };
 
-  return {
+  const base = {
     domain: zoneData.name,
     currentPlan: currentPlanId,
     currentPrice,
@@ -268,6 +378,9 @@ function analyze(zoneData) {
     features,
     analysisDays: zoneData.analytics.days,
   };
+
+  const score = computeScore(base);
+  return { ...base, score, scoreLabel: scoreLabel(score) };
 }
 
 /**
@@ -310,7 +423,7 @@ function assignEnterpriseSlots(results, slots) {
         status = "upgrade";
       }
 
-      return {
+      const updated = {
         ...r,
         recommendedPlan: "enterprise",
         recommendedPrice: 0, // covered by account-level enterprise agreement
@@ -318,6 +431,8 @@ function assignEnterpriseSlots(results, slots) {
         monthlySavings: r.currentPrice - 0,
         enterpriseSlot: true,
       };
+      const newScore = computeScore(updated);
+      return { ...updated, score: newScore, scoreLabel: scoreLabel(newScore) };
     }
 
     // Domain did not win a slot — return base recommendation as-is.
@@ -327,4 +442,4 @@ function assignEnterpriseSlots(results, slots) {
   });
 }
 
-module.exports = { analyze, assignEnterpriseSlots, normalizePlanId, PLAN_PRICES, PLANS, TRAFFIC_THRESHOLDS, PAGE_RULE_LIMITS };
+module.exports = { analyze, assignEnterpriseSlots, normalizePlanId, computeScore, scoreLabel, PLAN_PRICES, PLANS, TRAFFIC_THRESHOLDS, PAGE_RULE_LIMITS, SCORE_WEIGHTS };

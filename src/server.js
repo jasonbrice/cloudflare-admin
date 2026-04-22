@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const { listZones, collectZoneData, runPool } = require("./cloudflare");
-const { analyze, assignEnterpriseSlots } = require("./analyzer");
+const { analyze, assignEnterpriseSlots, computeScore, scoreLabel } = require("./analyzer");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -38,10 +38,18 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-// Return cached data if available (non-SSE, fast)
+// Return cached data if available (non-SSE, fast). Recomputes recommendation
+// scores on every read so scoring-formula tweaks apply without re-hitting the
+// Cloudflare API. Score computation is pure and cheap.
 app.get("/api/cached", (_req, res) => {
   const cached = loadCache();
   if (cached) {
+    if (Array.isArray(cached.results)) {
+      cached.results = cached.results.map((r) => {
+        const score = computeScore(r);
+        return { ...r, score, scoreLabel: scoreLabel(score) };
+      });
+    }
     res.json(cached);
   } else {
     res.json({ results: null });

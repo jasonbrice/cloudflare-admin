@@ -49,6 +49,14 @@
   .badge-error { background: #f3f4f6; color: #6b7280; }
   .badge-moved { background: #dbeafe; color: #1e40af; }
   .domain-card .recommend { font-size: 11px; color: #888; margin-top: 3px; }
+  .domain-card .score-chip { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; margin-left: 4px; vertical-align: middle; letter-spacing: 0.02em; }
+  .score-chip.critical { background: #fecaca; color: #7f1d1d; }
+  .score-chip.strong { background: #fee2e2; color: #991b1b; }
+  .score-chip.moderate { background: #fef3c7; color: #92400e; }
+  .score-chip.weak { background: #f3f4f6; color: #6b7280; }
+  .score-chip.downgrade-critical { background: #86efac; color: #14532d; }
+  .score-chip.downgrade-strong { background: #dcfce7; color: #166534; }
+  .score-chip.downgrade-moderate { background: #d1fae5; color: #065f46; }
 
   #pending { background: #fff; border-top: 1px solid #e0e0e0; padding: 16px 24px; display: none; }
   #pending.has-changes { display: block; }
@@ -101,6 +109,21 @@
   .headroom-pct.red { color: #991b1b; }
   .headroom-value { font-size: 12px; color: #888; width: 140px; flex-shrink: 0; }
 
+  .strength-row { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 16px; padding: 10px 12px; background: #f9fafb; border-radius: 8px; }
+  .strength-label { font-weight: 600; color: #374151; }
+  .strength-bar-track { flex: 1; height: 10px; background: #e5e7eb; border-radius: 5px; overflow: hidden; }
+  .strength-bar-fill { height: 100%; border-radius: 5px; transition: width 0.3s; }
+  .strength-bar-fill.upgrade-critical { background: #7f1d1d; }
+  .strength-bar-fill.upgrade-strong { background: #dc2626; }
+  .strength-bar-fill.upgrade-moderate { background: #f59e0b; }
+  .strength-bar-fill.upgrade-weak { background: #9ca3af; }
+  .strength-bar-fill.downgrade-critical { background: #14532d; }
+  .strength-bar-fill.downgrade-strong { background: #16a34a; }
+  .strength-bar-fill.downgrade-moderate { background: #10b981; }
+  .strength-bar-fill.downgrade-weak { background: #9ca3af; }
+  .strength-num { font-weight: 700; font-size: 14px; min-width: 32px; text-align: right; }
+  .strength-tier { font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.05em; }
+
   .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 24px; }
   .feature-item { font-size: 13px; padding: 3px 0; display: flex; align-items: center; gap: 6px; }
   .feature-icon { font-size: 14px; width: 18px; text-align: center; }
@@ -126,6 +149,16 @@
       <option value="name">Name</option>
       <option value="requests">Requests</option>
       <option value="bandwidth">Bandwidth</option>
+      <option value="strength">Recommendation strength</option>
+    </select>
+  </label>
+  <label>Min strength:
+    <select id="min-strength">
+      <option value="0">All</option>
+      <option value="40">Moderate+</option>
+      <option value="65">Strong+</option>
+      <option value="85">Critical only</option>
+      <option value="actionable">Any actionable</option>
     </select>
   </label>
   <span id="data-timestamp" style="font-size:12px; color:#888; margin-left:auto;"></span>
@@ -290,8 +323,18 @@ function getEffectivePlan(r) {
 function renderAll() {
   const search = document.getElementById("search").value.toLowerCase();
   const sortBy = document.getElementById("sort").value;
+  const minStrength = document.getElementById("min-strength").value;
 
-  const filtered = allResults.filter(r => !search || r.domain.toLowerCase().includes(search));
+  const filtered = allResults.filter(r => {
+    if (search && !r.domain.toLowerCase().includes(search)) return false;
+    if (minStrength === "actionable") {
+      if (r.status === "ok" || r.status === "error") return false;
+    } else {
+      const min = parseInt(minStrength, 10) || 0;
+      if (min > 0 && (r.score || 0) < min) return false;
+    }
+    return true;
+  });
 
   const byPlan = { free: [], pro: [], business: [], enterprise: [] };
   for (const r of filtered) {
@@ -303,6 +346,7 @@ function renderAll() {
   // Sort
   const sortFn = sortBy === "requests" ? (a,b) => b.monthlyRequests - a.monthlyRequests
     : sortBy === "bandwidth" ? (a,b) => b.monthlyBandwidth - a.monthlyBandwidth
+    : sortBy === "strength" ? (a,b) => (b.score || 0) - (a.score || 0) || a.domain.localeCompare(b.domain)
     : (a,b) => a.domain.localeCompare(b.domain);
 
   for (const plan of Object.keys(byPlan)) {
@@ -335,8 +379,16 @@ function createCard(r) {
     recommend = `<div class="recommend">Recommended: ${capitalize(r.recommendedPlan)}</div>`;
   }
 
+  let scoreChip = "";
+  if (!moved && typeof r.score === "number" && r.score > 0 && r.scoreLabel) {
+    const chipCls = r.status === "downgrade" && r.scoreLabel !== "weak"
+      ? `downgrade-${r.scoreLabel}`
+      : r.scoreLabel;
+    scoreChip = `<span class="score-chip ${chipCls}" title="Recommendation strength: ${r.score}/100">${r.scoreLabel.toUpperCase()} ${r.score}</span>`;
+  }
+
   card.innerHTML = `
-    <div class="domain-name">${escHtml(r.domain)}<span class="domain-badge ${badgeClass}">${badgeText}</span></div>
+    <div class="domain-name">${escHtml(r.domain)}<span class="domain-badge ${badgeClass}">${badgeText}</span>${scoreChip}</div>
     <div class="domain-stats">
       <span>${fmtNum(r.monthlyRequests)} req/mo</span>
       <span>${fmtBytes(r.monthlyBandwidth)}/mo</span>
@@ -457,6 +509,7 @@ function downloadCsv(filename, headers, rows) {
 function exportAll() {
   const headers = [
     "Domain", "Current Plan", "Recommended Plan", "Status",
+    "Strength Score", "Strength Label",
     "Monthly Requests", "Monthly Bandwidth",
     "Cache Hit Ratio", "Current Price", "Recommended Price", "Monthly Savings",
     "Traffic Reasoning", "Feature Reasoning",
@@ -465,6 +518,7 @@ function exportAll() {
   ];
   const rows = allResults.map(r => [
     r.domain, capitalize(r.currentPlan), capitalize(r.recommendedPlan), r.status,
+    r.score ?? 0, r.scoreLabel || "",
     r.monthlyRequests, fmtBytes(r.monthlyBandwidth),
     (r.cacheRatio * 100).toFixed(1) + "%",
     "$" + (r.currentPrice ?? 0), "$" + (r.recommendedPrice ?? 0),
@@ -493,6 +547,7 @@ function exportChanges() {
   const headers = [
     "Domain", "Current Plan", "Proposed Plan",
     "Current Price", "Proposed Price", "Monthly Savings",
+    "Strength Score", "Strength Label",
     "Reasoning"
   ];
   const rows = entries.map(([domain, change]) => {
@@ -503,6 +558,7 @@ function exportChanges() {
     return [
       domain, capitalize(change.from), capitalize(change.to),
       "$" + fromPrice, "$" + toPrice, "$" + (fromPrice - toPrice),
+      r?.score ?? 0, r?.scoreLabel || "",
       reasons.join("; "),
     ];
   });
@@ -514,6 +570,7 @@ function exportChanges() {
 // --- Controls ---
 document.getElementById("search").addEventListener("input", renderAll);
 document.getElementById("sort").addEventListener("change", renderAll);
+document.getElementById("min-strength").addEventListener("change", renderAll);
 document.getElementById("btn-export-all").addEventListener("click", exportAll);
 document.getElementById("btn-export-changes").addEventListener("click", exportChanges);
 document.getElementById("btn-refresh").addEventListener("click", fullRefresh);
@@ -560,6 +617,19 @@ function showDetail(r) {
 
   // Analysis period
   html += `<div style="font-size:12px; color:#888; margin-bottom:16px;">Based on ${r.analysisDays || 30}-day analysis period</div>`;
+
+  // Recommendation strength
+  if (typeof r.score === "number" && r.score > 0 && r.scoreLabel) {
+    const fillCls = `${r.status}-${r.scoreLabel}`;
+    html += `<div class="strength-row">
+      <span class="strength-label">Strength</span>
+      <span class="strength-tier">${r.scoreLabel}</span>
+      <div class="strength-bar-track">
+        <div class="strength-bar-fill ${fillCls}" style="width: ${r.score}%"></div>
+      </div>
+      <span class="strength-num">${r.score}</span>
+    </div>`;
+  }
 
   // Traffic Analysis
   html += `<div class="detail-section"><h3>Traffic Analysis</h3>`;
