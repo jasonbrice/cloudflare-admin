@@ -129,6 +129,11 @@
   .feature-icon { font-size: 14px; width: 18px; text-align: center; }
   .feature-icon.on { color: #16a34a; }
   .feature-icon.off { color: #d1d5db; }
+
+  .header-stats .user-badge { display: none; align-items: center; gap: 8px; font-size: 13px; color: #374151; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 4px 10px; border-radius: 999px; }
+  .header-stats .user-badge.visible { display: inline-flex; }
+  .user-badge .user-dot { width: 7px; height: 7px; border-radius: 50%; background: #16a34a; }
+  .user-badge .user-name { font-weight: 500; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>
 </head>
 <body>
@@ -139,6 +144,10 @@
     <span id="stat-total"></span>
     <span id="stat-enterprise"></span>
     <span id="stat-savings"></span>
+    <span class="user-badge" id="user-badge" title="Authenticated user">
+      <span class="user-dot"></span>
+      <span class="user-name" id="user-name"></span>
+    </span>
   </div>
 </header>
 
@@ -719,7 +728,33 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeModal();
 });
 
+// --- Authenticated user badge (App Service Easy Auth) ---
+// Fetches /.auth/me — only populated when Easy Auth is enabled. Silently hides
+// on failure so local dev (no auth) still works cleanly.
+async function loadUserBadge() {
+  try {
+    const resp = await fetch("/.auth/me", { credentials: "include" });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const principal = Array.isArray(data) ? data[0] : data;
+    if (!principal) return;
+
+    const claims = principal.user_claims || [];
+    const findClaim = (typ) => claims.find((c) => c.typ === typ)?.val;
+    const name =
+      findClaim("name") ||
+      findClaim("preferred_username") ||
+      findClaim("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name") ||
+      principal.user_id ||
+      "authenticated";
+
+    document.getElementById("user-name").textContent = name;
+    document.getElementById("user-badge").classList.add("visible");
+  } catch { /* no auth — hide silently */ }
+}
+
 // --- Init ---
+loadUserBadge();
 loadData();
 </script>
 </body>
