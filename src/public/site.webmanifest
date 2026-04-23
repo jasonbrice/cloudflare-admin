@@ -1,6 +1,6 @@
 {
-  "name": "Cloudflare Dashboard",
-  "short_name": "CFDash",
+  "name": "CF Dash",
+  "short_name": "CF Dash",
   "icons": [
     {
       "src": "/web-app-manifest-192x192.png",
