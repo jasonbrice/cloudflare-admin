@@ -62,13 +62,23 @@
   .score-chip.downgrade-critical { background: #86efac; color: #14532d; }
   .score-chip.downgrade-strong { background: #dcfce7; color: #166534; }
   .score-chip.downgrade-moderate { background: #d1fae5; color: #065f46; }
-  /* Security/optimization chip — distinct palette (purple/orange) so it doesn't
-     get mistaken for the plan-recommendation chip on the same card. */
-  .domain-card .sec-chip { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; margin-left: 4px; vertical-align: middle; letter-spacing: 0.02em; }
+  /* Security/optimization chip used in the detail modal. */
+  .sec-chip { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; margin-left: 4px; vertical-align: middle; letter-spacing: 0.02em; }
   .sec-chip.critical { background: #c4b5fd; color: #4c1d95; }
   .sec-chip.strong { background: #ddd6fe; color: #5b21b6; }
   .sec-chip.moderate { background: #ede9fe; color: #6d28d9; }
   .sec-chip.weak { background: #f3f4f6; color: #6b7280; }
+
+  /* Card body lines: plan + security with traffic-light status dots */
+  .domain-card .card-line { font-size: 12px; color: #374151; display: flex; align-items: center; gap: 6px; margin-top: 3px; line-height: 1.3; }
+  .domain-card .card-line .label { font-weight: 600; color: #4b5563; }
+  .domain-card .card-line .line-text { color: #4b5563; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .domain-card .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 2px rgba(0,0,0,0.04); }
+  .status-dot.dot-green { background: #22c55e; }
+  .status-dot.dot-yellow { background: #eab308; }
+  .status-dot.dot-red { background: #ef4444; }
+  .status-dot.dot-grey { background: #9ca3af; }
+  .status-dot.dot-blue { background: #3b82f6; }   /* MOVED state */
 
   #pending { background: #fff; border-top: 1px solid #e0e0e0; padding: 16px 24px; display: none; }
   #pending.has-changes { display: block; }
@@ -183,17 +193,26 @@
       <option value="name">Name</option>
       <option value="requests">Requests</option>
       <option value="bandwidth">Bandwidth</option>
-      <option value="strength">Recommendation strength</option>
+      <option value="strength">Plan strength</option>
       <option value="security">Security strength</option>
     </select>
   </label>
-  <label>Min strength:
+  <label>Plan strength:
     <select id="min-strength">
       <option value="0">All</option>
       <option value="40">Moderate+</option>
       <option value="65">Strong+</option>
       <option value="85">Critical only</option>
       <option value="actionable">Any actionable</option>
+    </select>
+  </label>
+  <label>Security strength:
+    <select id="min-sec-strength">
+      <option value="0">All</option>
+      <option value="40">Moderate+</option>
+      <option value="65">Strong+</option>
+      <option value="85">Critical only</option>
+      <option value="actionable">Any with recs</option>
     </select>
   </label>
   <span id="data-timestamp" style="font-size:12px; color:#888; margin-left:auto;"></span>
@@ -400,27 +419,27 @@ function getEffectivePlan(r) {
 function renderAll() {
   const search = document.getElementById("search").value.toLowerCase();
   const sortBy = document.getElementById("sort").value;
-  const minStrength = document.getElementById("min-strength").value;
+  const minPlan = document.getElementById("min-strength").value;
+  const minSec = document.getElementById("min-sec-strength").value;
 
-  // Min-strength filter applies to whichever score the user is sorting by.
-  // Default: plan-recommendation score. When sorting by "security", the filter
-  // applies to the security score instead.
-  const scoreField = sortBy === "security" ? "securityScore" : "score";
+  function matchesPlanFilter(r) {
+    if (minPlan === "0") return true;
+    if (minPlan === "actionable") return r.status !== "ok" && r.status !== "error";
+    const min = parseInt(minPlan, 10) || 0;
+    return (r.score || 0) >= min;
+  }
+
+  function matchesSecFilter(r) {
+    if (minSec === "0") return true;
+    if (minSec === "actionable") return (r.securityScore || 0) > 0;
+    const min = parseInt(minSec, 10) || 0;
+    return (r.securityScore || 0) >= min;
+  }
 
   const filtered = allResults.filter(r => {
     if (search && !r.domain.toLowerCase().includes(search)) return false;
-    if (minStrength === "actionable") {
-      // For plan-score: any non-ok/non-error status is actionable.
-      // For security-score: any non-zero security score is actionable.
-      if (scoreField === "securityScore") {
-        if (!(r.securityScore > 0)) return false;
-      } else {
-        if (r.status === "ok" || r.status === "error") return false;
-      }
-    } else {
-      const min = parseInt(minStrength, 10) || 0;
-      if (min > 0 && (r[scoreField] || 0) < min) return false;
-    }
+    if (!matchesPlanFilter(r)) return false;
+    if (!matchesSecFilter(r)) return false;
     return true;
   });
 
@@ -459,36 +478,55 @@ function createCard(r) {
   card.dataset.domain = r.domain;
 
   const moved = !!pendingChanges[r.domain];
-  let badgeClass = "badge-" + r.status;
-  let badgeText = r.status === "ok" ? "OK" : r.status === "downgrade" ? "DOWNGRADE" : r.status === "upgrade" ? "UPGRADE" : "ERROR";
-  if (moved) { badgeClass = "badge-moved"; badgeText = "MOVED"; }
 
-  let recommend = "";
-  if (!moved && r.recommendedPlan !== r.currentPlan && r.status !== "error") {
-    recommend = `<div class="recommend">Recommended: ${capitalize(r.recommendedPlan)}</div>`;
+  // --- Plan line ---
+  let planDot = "dot-grey";
+  let planText = "";
+  let planTitle = "";
+  if (moved) {
+    const change = pendingChanges[r.domain];
+    planDot = "dot-blue";
+    planText = `Moved ${capitalize(change.from)} → ${capitalize(change.to)}`;
+    planTitle = "Pending plan change (drag-and-drop)";
+  } else if (r.status === "error") {
+    planDot = "dot-grey";
+    planText = "Error analyzing zone";
+    planTitle = (r.featureReasons || []).join("; ");
+  } else if (r.status === "ok") {
+    planDot = "dot-green";
+    planText = `OK on ${capitalize(r.currentPlan)}`;
+    planTitle = "Current plan matches recommendation";
+  } else {
+    // upgrade or downgrade — color by severity
+    planDot = severityToDot(r.scoreLabel);
+    const verb = r.status === "upgrade" ? "Upgrade to" : "Could downgrade to";
+    const scorePart = r.score > 0 ? ` (${r.scoreLabel} ${r.score})` : "";
+    planText = `${verb} ${capitalize(r.recommendedPlan)}${scorePart}`;
+    planTitle = `Plan recommendation strength: ${r.score}/100 (${r.scoreLabel})`;
   }
 
-  let scoreChip = "";
-  if (!moved && typeof r.score === "number" && r.score > 0 && r.scoreLabel) {
-    const chipCls = r.status === "downgrade" && r.scoreLabel !== "weak"
-      ? `downgrade-${r.scoreLabel}`
-      : r.scoreLabel;
-    scoreChip = `<span class="score-chip ${chipCls}" title="Plan recommendation strength: ${r.score}/100">${r.scoreLabel.toUpperCase()} ${r.score}</span>`;
-  }
-
-  let secChip = "";
-  if (typeof r.securityScore === "number" && r.securityScore > 0 && r.securityScoreLabel) {
-    const recCount = (r.securityRecommendations || []).length;
-    secChip = `<span class="sec-chip ${r.securityScoreLabel}" title="Security &amp; optimization: ${recCount} recommendation${recCount === 1 ? "" : "s"} (${r.securityScore}/100)">SEC ${r.securityScore}</span>`;
-  }
+  // --- Security line ---
+  const recCount = (r.securityRecommendations || []).length;
+  const secDot = recCount === 0 ? "dot-green" : severityToDot(r.securityScoreLabel);
+  const secText = recCount === 0
+    ? "All clear"
+    : `${recCount} rec${recCount === 1 ? "" : "s"} (${r.securityScoreLabel} ${r.securityScore})`;
+  const secTitle = recCount === 0
+    ? "No actionable security or optimization items detected"
+    : `Security recommendation strength: ${r.securityScore}/100 (${r.securityScoreLabel})`;
 
   card.innerHTML = `
-    <div class="domain-name">${escHtml(r.domain)}<span class="domain-badge ${badgeClass}">${badgeText}</span>${scoreChip}${secChip}</div>
+    <div class="domain-name">${escHtml(r.domain)}</div>
+    <div class="card-line" title="${escHtml(planTitle)}">
+      <span class="status-dot ${planDot}"></span><span class="label">Plan:</span><span class="line-text">${escHtml(planText)}</span>
+    </div>
+    <div class="card-line" title="${escHtml(secTitle)}">
+      <span class="status-dot ${secDot}"></span><span class="label">Security:</span><span class="line-text">${escHtml(secText)}</span>
+    </div>
     <div class="domain-stats">
       <span>${fmtNum(r.monthlyRequests)} req/mo</span>
       <span>${fmtBytes(r.monthlyBandwidth)}/mo</span>
     </div>
-    ${recommend}
   `;
 
   card.addEventListener("dragstart", (e) => {
@@ -507,6 +545,17 @@ function createCard(r) {
 
 function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 function escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+// Map a severity label (critical/strong/moderate/weak/"") to a status-dot
+// color class. Used by both card lines for consistent traffic-light coloring.
+// "weak" means recs exist but are low priority -> grey (not green, which is
+// reserved for the truly-nothing-to-do state).
+function severityToDot(label) {
+  if (label === "critical" || label === "strong") return "dot-red";
+  if (label === "moderate") return "dot-yellow";
+  if (label === "weak") return "dot-grey";
+  return "dot-grey";
+}
 
 // Render an Azure Portal link for a backup summary, if the server provided one.
 // portalUrl is computed server-side; if null (no AZURE_STORAGE_CONNECTION_STRING),
@@ -679,6 +728,7 @@ function exportChanges() {
 document.getElementById("search").addEventListener("input", renderAll);
 document.getElementById("sort").addEventListener("change", renderAll);
 document.getElementById("min-strength").addEventListener("change", renderAll);
+document.getElementById("min-sec-strength").addEventListener("change", renderAll);
 document.getElementById("btn-export-all").addEventListener("click", exportAll);
 document.getElementById("btn-export-changes").addEventListener("click", exportChanges);
 document.getElementById("btn-refresh").addEventListener("click", fullRefresh);
