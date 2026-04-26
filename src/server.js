@@ -5,6 +5,7 @@ const path = require("path");
 const express = require("express");
 const { listZones, collectZoneData, runPool } = require("./cloudflare");
 const { analyze, assignEnterpriseSlots, computeScore, scoreLabel } = require("./analyzer");
+const { backupAllZones } = require("./backup");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -133,6 +134,47 @@ app.get("/api/analyze", async (req, res) => {
     const timestamp = saveCache(payload);
 
     send("done", { ...payload, timestamp });
+  } catch (err) {
+    send("error", { message: err.message });
+  }
+
+  res.end();
+});
+
+// Stream zone backup progress via SSE
+app.get("/api/backup", async (_req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+
+  function send(event, data) {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  }
+
+  try {
+    if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
+      send("error", {
+        message:
+          "AZURE_STORAGE_CONNECTION_STRING is not set on the server. Add it to .env and restart.",
+      });
+      res.end();
+      return;
+    }
+
+    const summary = await backupAllZones((evt) => {
+      // Forward each progress event from backup module to the client
+      if (evt.phase === "done") {
+        send("done", evt);
+      } else {
+        send("progress", evt);
+      }
+    });
+
+    // backupAllZones already emits a "done" via onProgress, but emit one more
+    // explicit done as a safety net in case the consumer missed it.
+    send("done", { phase: "done", ...summary });
   } catch (err) {
     send("error", { message: err.message });
   }

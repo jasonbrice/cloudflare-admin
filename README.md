@@ -35,6 +35,7 @@ Options:
 | `--days <n>` | Analysis period in days | 30 |
 | `--enterprise-slots <n>` | Number of enterprise slots (auto-detected if omitted) | auto |
 | `--json` | Output as JSON | off |
+| `--backup` | Back up DNS zone files for all zones to Azure Blob Storage (see [DNS Zone Backups](#dns-zone-backups)) | off |
 
 ### Web Dashboard
 
@@ -51,6 +52,7 @@ Opens at http://localhost:3000. Features:
 - Search and sort (by name, requests, or bandwidth)
 - Pending changes panel with estimated savings
 - Live progress bar during initial data load
+- **Backup Zones to Azure** button to snapshot all DNS zone files to Azure Blob Storage (see [DNS Zone Backups](#dns-zone-backups))
 
 ## How It Works
 
@@ -97,6 +99,47 @@ Click any domain card in the dashboard to see:
 - **Tier headroom** — color-coded bars showing how close to the next tier's limits (green < 60%, yellow 60–85%, red > 85%)
 - **Feature inventory** — checklist of all monitored features (WAF, firewall rules, SSL, rate limits, page rules, Workers, Polish, Mirage, Under Attack mode)
 
+## DNS Zone Backups
+
+The app can export every Cloudflare zone's DNS records as a BIND-format zone file and upload them to Azure Blob Storage for disaster recovery and audit history. Each run writes to a date-stamped folder (no overwrites), so you can restore any prior snapshot.
+
+### One-time setup
+
+1. **Create an Azure Storage Account** (any region, any redundancy — `Standard_LRS` is cheapest and fine for backups). In the Portal: *Storage accounts → Create*.
+2. **Create a private container** in the storage account (or let the app auto-create the default `cloudflare-zone-backups` on first run). Make sure public access is set to **None**.
+3. **Get the connection string**: Storage Account → *Security + networking → Access keys → Show → key1 → Connection string*.
+4. **Add credentials to `.env`**:
+   ```
+   AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net
+   AZURE_STORAGE_CONTAINER=cloudflare-zone-backups
+   ```
+5. **Add `Zone:DNS:Read`** to your Cloudflare API token (https://dash.cloudflare.com/profile/api-tokens). The existing token can be edited in place.
+
+### Running a backup
+
+CLI:
+```bash
+node src/index.js --backup
+```
+
+Or click the **Backup Zones to Azure** button in the dashboard. A modal shows live progress and a final summary with the run ID.
+
+### What gets stored
+
+```
+<container>/2026-04-26T14-30-00Z/
+  example.com.zone
+  foo.com.zone
+  ...
+  manifest.json     # run metadata (timestamp, per-zone status, errors)
+```
+
+Each `.zone` file is a standard BIND-format DNS zone file (importable back into Cloudflare or any other DNS provider).
+
+### Storage tier
+
+New blobs are written using the storage account's default access tier (typically Hot). For cost savings on long-term retention, configure an Azure Storage **Lifecycle Management** rule to move blobs older than N days to Cool/Cold/Archive. Connection-string auth doesn't restrict this — it's just an Azure-side policy.
+
 ## Project Structure
 
 ```
@@ -105,6 +148,7 @@ src/
   server.js       # Express server for web dashboard
   cloudflare.js   # Cloudflare API client (REST + GraphQL)
   analyzer.js     # Recommendation engine with traffic + feature heuristics
+  backup.js       # DNS zone backup to Azure Blob Storage
   formatter.js    # CLI table output
   public/
     index.html    # Web dashboard (vanilla HTML/CSS/JS)

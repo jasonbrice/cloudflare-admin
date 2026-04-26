@@ -3,16 +3,17 @@
   "version": "1.0.0",
   "description": "",
   "main": "src/index.js",
- "scripts": {
-  "start": "node src/server.js",
-  "cli": "node src/index.js",
-  "dev": "node src/server.js"
-},
+  "scripts": {
+    "start": "node src/server.js",
+    "cli": "node src/index.js",
+    "dev": "node src/server.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@azure/storage-blob": "^12.31.0",
     "dotenv": "^17.4.1",
     "express": "^5.2.1"
   }

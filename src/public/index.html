@@ -177,6 +177,7 @@
   </label>
   <span id="data-timestamp" style="font-size:12px; color:#888; margin-left:auto;"></span>
   <button id="btn-export-all">Export All</button>
+  <button id="btn-backup">Backup Zones to Azure</button>
   <button id="btn-refresh" class="primary">Refresh Data</button>
   <button id="btn-reset">Reset Changes</button>
 </div>
@@ -222,6 +223,24 @@
       <button class="modal-close" id="modal-close-btn">&times;</button>
     </div>
     <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<div id="backup-modal" class="modal-overlay hidden">
+  <div class="modal" style="width: 560px;">
+    <div class="modal-header">
+      <h2>Backup Zones to Azure</h2>
+      <button class="modal-close" id="backup-close-btn">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="backup-status" style="font-size: 14px; color: #555; margin-bottom: 12px;">Starting backup...</div>
+      <div class="bar-container" style="width: 100%; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; margin-bottom: 12px;">
+        <div id="backup-bar" style="height: 100%; background: #2563eb; border-radius: 4px; transition: width 0.2s; width: 0%;"></div>
+      </div>
+      <div id="backup-counts" style="font-size: 13px; color: #666; margin-bottom: 12px;"></div>
+      <div id="backup-log" style="font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px 10px; max-height: 280px; overflow-y: auto;"></div>
+      <div id="backup-summary" style="margin-top: 14px; font-size: 14px;"></div>
+    </div>
   </div>
 </div>
 
@@ -597,6 +616,107 @@ document.getElementById("btn-clear-pending").addEventListener("click", () => {
   pendingChanges = {};
   renderAll();
   renderPending();
+});
+
+// --- Backup Modal ---
+let backupEventSource = null;
+
+function openBackupModal() {
+  document.getElementById("backup-modal").classList.remove("hidden");
+  document.getElementById("backup-status").textContent = "Connecting to Azure...";
+  document.getElementById("backup-bar").style.width = "0%";
+  document.getElementById("backup-counts").textContent = "";
+  document.getElementById("backup-log").innerHTML = "";
+  document.getElementById("backup-summary").innerHTML = "";
+  startBackup();
+}
+
+function closeBackupModal() {
+  if (backupEventSource) {
+    backupEventSource.close();
+    backupEventSource = null;
+  }
+  document.getElementById("backup-modal").classList.add("hidden");
+}
+
+function appendBackupLog(line, color) {
+  const log = document.getElementById("backup-log");
+  const div = document.createElement("div");
+  if (color) div.style.color = color;
+  div.textContent = line;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function startBackup() {
+  let succeeded = 0;
+  let failed = 0;
+  let total = 0;
+
+  backupEventSource = new EventSource("/api/backup");
+
+  backupEventSource.addEventListener("progress", (e) => {
+    const evt = JSON.parse(e.data);
+    if (evt.phase === "start") {
+      total = evt.total;
+      document.getElementById("backup-status").textContent =
+        `Backing up ${total} zone(s) — run ${evt.runId}`;
+      appendBackupLog(`Run started: ${evt.runId}`);
+    } else if (evt.phase === "zone") {
+      if (evt.status === "ok") {
+        succeeded++;
+        appendBackupLog(`[${evt.current}/${evt.total}] ${evt.domain} — ok`);
+      } else {
+        failed++;
+        appendBackupLog(`[${evt.current}/${evt.total}] ${evt.domain} — FAILED: ${evt.error}`, "#b91c1c");
+      }
+      const pct = Math.round((evt.current / evt.total) * 100);
+      document.getElementById("backup-bar").style.width = pct + "%";
+      document.getElementById("backup-counts").textContent =
+        `${evt.current}/${evt.total} done — ${succeeded} ok, ${failed} failed`;
+    } else if (evt.phase === "manifest") {
+      document.getElementById("backup-status").textContent = "Uploading manifest...";
+      appendBackupLog("Uploading manifest.json");
+    }
+  });
+
+  backupEventSource.addEventListener("done", (e) => {
+    const summary = JSON.parse(e.data);
+    backupEventSource.close();
+    backupEventSource = null;
+
+    document.getElementById("backup-status").textContent = "Backup complete";
+    document.getElementById("backup-bar").style.width = "100%";
+    document.getElementById("backup-bar").style.background = summary.failed > 0 ? "#f59e0b" : "#10b981";
+
+    const summaryEl = document.getElementById("backup-summary");
+    summaryEl.innerHTML = `
+      <div style="padding: 10px 12px; background: ${summary.failed > 0 ? "#fef3c7" : "#d1fae5"}; border-radius: 6px;">
+        <strong>Run ID:</strong> ${escHtml(summary.runId || "")}<br>
+        <strong>Container:</strong> ${escHtml(summary.container || "")}<br>
+        <strong>Result:</strong> ${summary.succeeded || 0} succeeded, ${summary.failed || 0} failed (of ${summary.total || 0})
+      </div>
+    `;
+  });
+
+  backupEventSource.addEventListener("error", (e) => {
+    let msg = "Connection lost.";
+    try {
+      if (e.data) msg = JSON.parse(e.data).message || msg;
+    } catch {}
+    document.getElementById("backup-status").textContent = "Backup failed";
+    appendBackupLog(`ERROR: ${msg}`, "#b91c1c");
+    if (backupEventSource) {
+      backupEventSource.close();
+      backupEventSource = null;
+    }
+  });
+}
+
+document.getElementById("btn-backup").addEventListener("click", openBackupModal);
+document.getElementById("backup-close-btn").addEventListener("click", closeBackupModal);
+document.getElementById("backup-modal").addEventListener("click", (e) => {
+  if (e.target.id === "backup-modal") closeBackupModal();
 });
 
 // --- Detail Modal ---
