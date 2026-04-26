@@ -2,9 +2,9 @@ name: Scheduled DNS zone backup
 
 on:
   schedule:
-    # Daily at 07:00 UTC (~02:00 US Central, ~03:00 US Eastern).
+    # Weekly on Sundays at 07:00 UTC (~02:00 US Central, ~03:00 US Eastern).
     # Adjust to taste; cron times are always UTC on GitHub Actions.
-    - cron: '0 7 * * *'
+    - cron: '0 7 * * 0'
   workflow_dispatch:  # manual "Run workflow" button
 
 permissions:

@@ -127,7 +127,7 @@ Or click the **Backup Zones to Azure** button in the dashboard. A modal shows li
 
 ### Scheduled backups
 
-A GitHub Actions workflow at `.github/workflows/scheduled-backup.yml` runs the CLI backup on a daily schedule (07:00 UTC by default — adjust the `cron` line to suit). It reuses the `production` environment, so make sure these secrets are configured there:
+A GitHub Actions workflow at `.github/workflows/scheduled-backup.yml` runs the CLI backup on a weekly schedule (Sundays at 07:00 UTC by default — adjust the `cron` line to suit). It reuses the `production` environment, so make sure these secrets are configured there:
 
 - `CLOUDFLARE_API_TOKEN` (with `Zone:DNS:Read`)
 - `AZURE_STORAGE_CONNECTION_STRING`
