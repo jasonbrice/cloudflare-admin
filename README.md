@@ -43,7 +43,9 @@ Options:
 npm run dev
 ```
 
-Opens at http://localhost:3000. Features:
+Opens at http://localhost:3000. The dev server runs under [nodemon](https://nodemon.io/), so changes to `src/**/*.js` or `.env` automatically restart the server (handy after rotating credentials). Frontend HTML changes don't trigger a restart — just refresh the browser.
+
+Features:
 
 - Four-column layout showing domains grouped by current plan
 - Traffic stats (requests/mo, bandwidth/mo) on each domain card
