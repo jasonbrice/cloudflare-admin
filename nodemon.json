@@ -1,0 +1,6 @@
+{
+  "watch": ["src", ".env"],
+  "ext": "js,env",
+  "ignore": ["src/public/**", "data/**"],
+  "delay": "200"
+}
