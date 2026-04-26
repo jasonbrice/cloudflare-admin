@@ -153,6 +153,80 @@ const SECURITY_RULES = [
       action: "Page rule or Worker that returns X-Robots-Tag: noindex; or password-protect via Cloudflare Access",
     };
   },
+
+  // 10. WAF (Pro+) — only for profiles with real attack surface.
+  // Skipped on parked/static/marketing/email-only/dev-staging because WAF
+  // protects against payloads that need somewhere to land (DB queries, file
+  // operations, etc.) — flagging it on a brochure site is the noise we're
+  // trying to avoid.
+  function enableWaf(r, { profile }) {
+    if (r.settings?.waf === "on") return null;
+    // WAF Custom Rules require Pro+. On Free, the plan-recommendation engine
+    // already surfaces the upgrade signal — don't double-counsel here.
+    if (planIdx(r.currentPlan) < planIdx("pro")) return null;
+
+    if (profile === "dynamic-app") {
+      return {
+        id: "enable-waf-dynamic",
+        category: "security",
+        severity: "strong",
+        title: "Enable Web Application Firewall (WAF)",
+        why: "Dynamic-app profile — forms, auth, and database-backed pages are exactly what WAF is designed to protect. Cloudflare's managed ruleset blocks the OWASP Top-10 payloads (SQLi, XSS, RCE, path traversal) before they reach your origin.",
+        action: "Security → WAF → Managed Rules → Enable Cloudflare Managed Ruleset",
+      };
+    }
+    if (profile === "api") {
+      return {
+        id: "enable-waf-api",
+        category: "security",
+        severity: "strong",
+        title: "Enable Web Application Firewall (WAF)",
+        why: "API endpoints are constantly probed for known CVEs and injection patterns. WAF managed rules catch the bulk of these before they hit your origin — especially valuable if any endpoint accepts user input that reaches a database.",
+        action: "Security → WAF → Managed Rules → Enable Cloudflare Managed Ruleset",
+      };
+    }
+    if (profile === "high-traffic-prod") {
+      return {
+        id: "enable-waf-prod",
+        category: "security",
+        severity: "moderate",
+        title: "Enable Web Application Firewall (WAF)",
+        why: "Significant traffic volume = bigger target. Even if most pages are static, WAF managed rules add a baseline layer against known CVEs at no marginal cost.",
+        action: "Security → WAF → Managed Rules → Enable Cloudflare Managed Ruleset",
+      };
+    }
+    return null;  // intentionally skipped for static/marketing/parked/email/staging
+  },
+
+  // 11. Rate limiting — for dynamic-app/api profiles with no rate limit rules.
+  // Pro+ only (Free tier has no rate limiting). Strong for API (auth abuse,
+  // scraping), moderate for dynamic-app (form spam, brute force).
+  function enableRateLimiting(r, { profile }) {
+    if ((r.rateLimits?.count || 0) > 0) return null;
+    if (planIdx(r.currentPlan) < planIdx("pro")) return null;
+
+    if (profile === "api") {
+      return {
+        id: "enable-rate-limiting-api",
+        category: "security",
+        severity: "strong",
+        title: "Add a rate-limiting rule",
+        why: "API endpoints with no rate limits are wide open to credential stuffing, scraping, and accidental client retry storms. Even a permissive baseline (e.g. 100 req/min/IP) catches the worst offenders.",
+        action: "Security → WAF → Rate limiting rules → Create rule",
+      };
+    }
+    if (profile === "dynamic-app") {
+      return {
+        id: "enable-rate-limiting-app",
+        category: "security",
+        severity: "moderate",
+        title: "Add a rate-limiting rule on auth endpoints",
+        why: "Dynamic-app profile typically has login/signup forms. A rule on /login (or your auth path) at e.g. 10 req/min/IP makes credential stuffing infeasible without breaking real users.",
+        action: "Security → WAF → Rate limiting rules → Create rule scoped to auth path",
+      };
+    }
+    return null;
+  },
 ];
 
 const PERFORMANCE_RULES = [
