@@ -9,7 +9,9 @@ const { detectSiteProfile } = require("./site-profile");
 const {
   recommendSecurityOptimizations,
   computeSecurityScore,
+  computePerformanceScore,
   securityScoreLabel,
+  performanceScoreLabel,
 } = require("./security-rules");
 const { backupAllZones } = require("./backup");
 
@@ -125,6 +127,7 @@ app.get("/api/cached", (_req, res) => {
         };
         const securityRecommendations = recommendSecurityOptimizations(enriched);
         const securityScore = computeSecurityScore(securityRecommendations);
+        const performanceScore = computePerformanceScore(securityRecommendations);
 
         return {
           ...enriched,
@@ -133,6 +136,8 @@ app.get("/api/cached", (_req, res) => {
           securityRecommendations,
           securityScore,
           securityScoreLabel: securityScoreLabel(securityScore),
+          performanceScore,
+          performanceScoreLabel: performanceScoreLabel(performanceScore),
         };
       });
     }

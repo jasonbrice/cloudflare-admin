@@ -2,7 +2,9 @@ const { detectSiteProfile } = require("./site-profile");
 const {
   recommendSecurityOptimizations,
   computeSecurityScore,
+  computePerformanceScore,
   securityScoreLabel,
+  performanceScoreLabel,
 } = require("./security-rules");
 
 // Plan tiers in ascending order
@@ -398,8 +400,11 @@ function analyze(zoneData) {
   base.profile = profileInfo.profile;
   base.profileSignals = profileInfo.signals;
 
+  // Both security and performance recommendations live in the same array.
+  // We score them separately so each gets its own card-line, sort, and filter.
   const securityRecommendations = recommendSecurityOptimizations(base);
   const securityScore = computeSecurityScore(securityRecommendations);
+  const performanceScore = computePerformanceScore(securityRecommendations);
 
   return {
     ...base,
@@ -408,6 +413,8 @@ function analyze(zoneData) {
     securityRecommendations,
     securityScore,
     securityScoreLabel: securityScoreLabel(securityScore),
+    performanceScore,
+    performanceScoreLabel: performanceScoreLabel(performanceScore),
   };
 }
 

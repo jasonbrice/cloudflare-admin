@@ -377,15 +377,21 @@ function recommendSecurityOptimizations(result) {
 }
 
 /**
- * Aggregate the recommendations into a single 0–100 score so we can show a
- * chip on the card and offer sort/filter on it. Capped per severity so a
- * domain with many weak items doesn't outrank a domain with two critical ones.
+ * Aggregate recommendations of a given category into a single 0–100 score.
+ * Capped per severity so a domain with many weak items doesn't outrank a
+ * domain with two critical ones. If `category` is omitted, all recommendations
+ * are scored together (legacy behavior).
  */
-function computeSecurityScore(recommendations) {
+function computeCategoryScore(recommendations, category) {
   if (!recommendations || !recommendations.length) return 0;
 
+  const filtered = category
+    ? recommendations.filter((r) => r.category === category)
+    : recommendations;
+  if (!filtered.length) return 0;
+
   const tally = { critical: 0, strong: 0, moderate: 0, weak: 0 };
-  for (const r of recommendations) {
+  for (const r of filtered) {
     if (tally[r.severity] !== undefined) tally[r.severity]++;
   }
 
@@ -396,7 +402,15 @@ function computeSecurityScore(recommendations) {
   return Math.min(100, Math.round(score));
 }
 
-function securityScoreLabel(score) {
+// Convenience wrappers used by analyzer / server.
+function computeSecurityScore(recommendations) {
+  return computeCategoryScore(recommendations, "security");
+}
+function computePerformanceScore(recommendations) {
+  return computeCategoryScore(recommendations, "performance");
+}
+
+function scoreLabel(score) {
   if (score >= 85) return "critical";
   if (score >= 65) return "strong";
   if (score >= 40) return "moderate";
@@ -404,8 +418,15 @@ function securityScoreLabel(score) {
   return "";
 }
 
+// Aliases for clarity at call sites; both delegate to the same bucket logic.
+const securityScoreLabel = scoreLabel;
+const performanceScoreLabel = scoreLabel;
+
 module.exports = {
   recommendSecurityOptimizations,
+  computeCategoryScore,
   computeSecurityScore,
+  computePerformanceScore,
   securityScoreLabel,
+  performanceScoreLabel,
 };
