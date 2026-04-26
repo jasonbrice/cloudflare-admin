@@ -70,6 +70,42 @@ async function request(url, options = {}, retries = 3) {
   }
 }
 
+// Same as requestOnce but returns the raw response body without JSON parsing.
+// Used by endpoints that return non-JSON content (e.g. DNS zone file export).
+function requestOnceText(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const req = https.request(
+      {
+        hostname: parsed.hostname,
+        path: parsed.pathname + parsed.search,
+        method: options.method || "GET",
+        headers: options.headers || {},
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (chunk) => (body += chunk));
+        res.on("end", () => resolve({ status: res.statusCode, body }));
+      }
+    );
+    req.on("error", reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+async function requestText(url, options = {}, retries = 3) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const result = await requestOnceText(url, options);
+    if (result.status === 429 && attempt < retries) {
+      const backoff = (attempt + 1) * 2000;
+      await delay(backoff);
+      continue;
+    }
+    return result;
+  }
+}
+
 async function apiGet(path) {
   const token = await getToken();
   const { status, data } = await request(`${API_BASE}${path}`, {
@@ -318,6 +354,36 @@ async function getZonePageRules(zoneId) {
   }
 }
 
+// Fetches the BIND-format DNS zone file for a zone.
+// Endpoint: GET /zones/{zone_id}/dns_records/export
+// Returns plain text (BIND), max 256 KiB. Requires DNS:Read permission.
+async function getZoneFileExport(zoneId) {
+  const token = await getToken();
+  const { status, body } = await requestText(
+    `${API_BASE}/zones/${zoneId}/dns_records/export`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "text/plain",
+      },
+    }
+  );
+  if (status < 200 || status >= 300) {
+    // The error response is JSON even though the success path is text.
+    let message = `HTTP ${status}`;
+    try {
+      const parsed = JSON.parse(body);
+      message =
+        parsed.errors?.map((e) => e.message).join(", ") || message;
+    } catch {
+      // body wasn't JSON; surface the raw text (truncated)
+      message = `HTTP ${status}: ${body.slice(0, 200)}`;
+    }
+    throw new Error(`Cloudflare zone export failed: ${message}`);
+  }
+  return body;
+}
+
 async function getZoneWorkersRoutes(zoneId) {
   try {
     const data = await apiGet(`/zones/${zoneId}/workers/routes`);
@@ -368,6 +434,7 @@ module.exports = {
   getZoneRateLimits,
   getZonePageRules,
   getZoneWorkersRoutes,
+  getZoneFileExport,
   collectZoneData,
   runPool,
   getToken,
