@@ -113,7 +113,8 @@ The app can export every Cloudflare zone's DNS records as a BIND-format zone fil
    AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net
    AZURE_STORAGE_CONTAINER=cloudflare-zone-backups
    ```
-5. **Add `Zone:DNS:Read`** to your Cloudflare API token (https://dash.cloudflare.com/profile/api-tokens). The existing token can be edited in place.
+5. **(Optional) Add `AZURE_SUBSCRIPTION_ID` and `AZURE_RESOURCE_GROUP`** to `.env`. With these set, the **View in Azure Portal** link on the backup success badge deep-links straight to your container. Without them, the link still works but lands on the portal's generic Storage accounts browse page.
+6. **Add `Zone:DNS:Read`** to your Cloudflare API token (https://dash.cloudflare.com/profile/api-tokens). The existing token can be edited in place.
 
 ### Running a backup
 
