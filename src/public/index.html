@@ -62,11 +62,13 @@
   .score-chip.downgrade-critical { background: #86efac; color: #14532d; }
   .score-chip.downgrade-strong { background: #dcfce7; color: #166534; }
   .score-chip.downgrade-moderate { background: #d1fae5; color: #065f46; }
-  /* Security/optimization chip used in the detail modal. */
+  /* Severity chip used in the detail modal. Colors aligned to the same
+     traffic-light convention as the card status dots: critical/strong = red,
+     moderate = yellow, weak = grey. Keeps the visual language consistent. */
   .sec-chip { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; margin-left: 4px; vertical-align: middle; letter-spacing: 0.02em; }
-  .sec-chip.critical { background: #c4b5fd; color: #4c1d95; }
-  .sec-chip.strong { background: #ddd6fe; color: #5b21b6; }
-  .sec-chip.moderate { background: #ede9fe; color: #6d28d9; }
+  .sec-chip.critical { background: #fecaca; color: #7f1d1d; }
+  .sec-chip.strong { background: #fee2e2; color: #991b1b; }
+  .sec-chip.moderate { background: #fef3c7; color: #92400e; }
   .sec-chip.weak { background: #f3f4f6; color: #6b7280; }
 
   /* Card body lines: plan + security with traffic-light status dots */
@@ -195,6 +197,7 @@
       <option value="bandwidth">Bandwidth</option>
       <option value="strength">Plan strength</option>
       <option value="security">Security strength</option>
+      <option value="performance">Performance strength</option>
     </select>
   </label>
   <label>Plan strength:
@@ -208,6 +211,15 @@
   </label>
   <label>Security strength:
     <select id="min-sec-strength">
+      <option value="0">All</option>
+      <option value="40">Moderate+</option>
+      <option value="65">Strong+</option>
+      <option value="85">Critical only</option>
+      <option value="actionable">Any with recs</option>
+    </select>
+  </label>
+  <label>Performance strength:
+    <select id="min-perf-strength">
       <option value="0">All</option>
       <option value="40">Moderate+</option>
       <option value="65">Strong+</option>
@@ -421,6 +433,7 @@ function renderAll() {
   const sortBy = document.getElementById("sort").value;
   const minPlan = document.getElementById("min-strength").value;
   const minSec = document.getElementById("min-sec-strength").value;
+  const minPerf = document.getElementById("min-perf-strength").value;
 
   function matchesPlanFilter(r) {
     if (minPlan === "0") return true;
@@ -436,10 +449,18 @@ function renderAll() {
     return (r.securityScore || 0) >= min;
   }
 
+  function matchesPerfFilter(r) {
+    if (minPerf === "0") return true;
+    if (minPerf === "actionable") return (r.performanceScore || 0) > 0;
+    const min = parseInt(minPerf, 10) || 0;
+    return (r.performanceScore || 0) >= min;
+  }
+
   const filtered = allResults.filter(r => {
     if (search && !r.domain.toLowerCase().includes(search)) return false;
     if (!matchesPlanFilter(r)) return false;
     if (!matchesSecFilter(r)) return false;
+    if (!matchesPerfFilter(r)) return false;
     return true;
   });
 
@@ -455,6 +476,7 @@ function renderAll() {
     : sortBy === "bandwidth" ? (a,b) => b.monthlyBandwidth - a.monthlyBandwidth
     : sortBy === "strength" ? (a,b) => (b.score || 0) - (a.score || 0) || a.domain.localeCompare(b.domain)
     : sortBy === "security" ? (a,b) => (b.securityScore || 0) - (a.securityScore || 0) || a.domain.localeCompare(b.domain)
+    : sortBy === "performance" ? (a,b) => (b.performanceScore || 0) - (a.performanceScore || 0) || a.domain.localeCompare(b.domain)
     : (a,b) => a.domain.localeCompare(b.domain);
 
   for (const plan of Object.keys(byPlan)) {
@@ -505,15 +527,26 @@ function createCard(r) {
     planTitle = `Plan recommendation strength: ${r.score}/100 (${r.scoreLabel})`;
   }
 
-  // --- Security line ---
-  const recCount = (r.securityRecommendations || []).length;
-  const secDot = recCount === 0 ? "dot-green" : severityToDot(r.securityScoreLabel);
-  const secText = recCount === 0
+  // --- Security & Performance lines (counts split by category) ---
+  const allRecs = r.securityRecommendations || [];
+  const secRecCount = allRecs.filter((x) => x.category === "security").length;
+  const perfRecCount = allRecs.filter((x) => x.category === "performance").length;
+
+  const secDot = secRecCount === 0 ? "dot-green" : severityToDot(r.securityScoreLabel);
+  const secText = secRecCount === 0
     ? "All clear"
-    : `${recCount} rec${recCount === 1 ? "" : "s"} (${r.securityScoreLabel} ${r.securityScore})`;
-  const secTitle = recCount === 0
-    ? "No actionable security or optimization items detected"
+    : `${secRecCount} rec${secRecCount === 1 ? "" : "s"} (${r.securityScoreLabel} ${r.securityScore})`;
+  const secTitle = secRecCount === 0
+    ? "No actionable security items detected"
     : `Security recommendation strength: ${r.securityScore}/100 (${r.securityScoreLabel})`;
+
+  const perfDot = perfRecCount === 0 ? "dot-green" : severityToDot(r.performanceScoreLabel);
+  const perfText = perfRecCount === 0
+    ? "All clear"
+    : `${perfRecCount} rec${perfRecCount === 1 ? "" : "s"} (${r.performanceScoreLabel} ${r.performanceScore})`;
+  const perfTitle = perfRecCount === 0
+    ? "No actionable performance items detected"
+    : `Performance recommendation strength: ${r.performanceScore}/100 (${r.performanceScoreLabel})`;
 
   card.innerHTML = `
     <div class="domain-name">${escHtml(r.domain)}</div>
@@ -522,6 +555,9 @@ function createCard(r) {
     </div>
     <div class="card-line" title="${escHtml(secTitle)}">
       <span class="status-dot ${secDot}"></span><span class="label">Security:</span><span class="line-text">${escHtml(secText)}</span>
+    </div>
+    <div class="card-line" title="${escHtml(perfTitle)}">
+      <span class="status-dot ${perfDot}"></span><span class="label">Performance:</span><span class="line-text">${escHtml(perfText)}</span>
     </div>
     <div class="domain-stats">
       <span>${fmtNum(r.monthlyRequests)} req/mo</span>
@@ -729,6 +765,7 @@ document.getElementById("search").addEventListener("input", renderAll);
 document.getElementById("sort").addEventListener("change", renderAll);
 document.getElementById("min-strength").addEventListener("change", renderAll);
 document.getElementById("min-sec-strength").addEventListener("change", renderAll);
+document.getElementById("min-perf-strength").addEventListener("change", renderAll);
 document.getElementById("btn-export-all").addEventListener("click", exportAll);
 document.getElementById("btn-export-changes").addEventListener("click", exportChanges);
 document.getElementById("btn-refresh").addEventListener("click", fullRefresh);
@@ -989,7 +1026,10 @@ function renderSecuritySection(r) {
   let html = `<div class="detail-section"><h3>Security &amp; Optimization</h3>`;
   html += `<div style="font-size:12px; color:#666; margin-bottom:8px;">Site profile: <strong>${escHtml(profileLabel)}</strong>`;
   if (typeof r.securityScore === "number" && r.securityScore > 0) {
-    html += ` &middot; Security score: <strong>${r.securityScore}/100 (${escHtml(r.securityScoreLabel)})</strong>`;
+    html += ` &middot; Security: <strong>${r.securityScore}/100 (${escHtml(r.securityScoreLabel)})</strong>`;
+  }
+  if (typeof r.performanceScore === "number" && r.performanceScore > 0) {
+    html += ` &middot; Performance: <strong>${r.performanceScore}/100 (${escHtml(r.performanceScoreLabel)})</strong>`;
   }
   html += `</div>`;
 
