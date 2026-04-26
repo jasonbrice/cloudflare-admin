@@ -1,3 +1,10 @@
+const { detectSiteProfile } = require("./site-profile");
+const {
+  recommendSecurityOptimizations,
+  computeSecurityScore,
+  securityScoreLabel,
+} = require("./security-rules");
+
 // Plan tiers in ascending order
 const PLANS = ["free", "pro", "business", "enterprise"];
 
@@ -377,10 +384,31 @@ function analyze(zoneData) {
     headroom,
     features,
     analysisDays: zoneData.analytics.days,
+    // Carry through raw signals so the recommendation engine can read them
+    // here AND so /api/cached can recompute recs without re-fetching.
+    settings: zoneData.settings || {},
+    dns: zoneData.dns || {},
+    dnssec: zoneData.dnssec || {},
   };
 
   const score = computeScore(base);
-  return { ...base, score, scoreLabel: scoreLabel(score) };
+
+  // Site profile + security/optimization recommendations
+  const profileInfo = detectSiteProfile(base);
+  base.profile = profileInfo.profile;
+  base.profileSignals = profileInfo.signals;
+
+  const securityRecommendations = recommendSecurityOptimizations(base);
+  const securityScore = computeSecurityScore(securityRecommendations);
+
+  return {
+    ...base,
+    score,
+    scoreLabel: scoreLabel(score),
+    securityRecommendations,
+    securityScore,
+    securityScoreLabel: securityScoreLabel(securityScore),
+  };
 }
 
 /**

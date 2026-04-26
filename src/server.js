@@ -5,6 +5,12 @@ const path = require("path");
 const express = require("express");
 const { listZones, collectZoneData, runPool } = require("./cloudflare");
 const { analyze, assignEnterpriseSlots, computeScore, scoreLabel } = require("./analyzer");
+const { detectSiteProfile } = require("./site-profile");
+const {
+  recommendSecurityOptimizations,
+  computeSecurityScore,
+  securityScoreLabel,
+} = require("./security-rules");
 const { backupAllZones } = require("./backup");
 
 const app = express();
@@ -108,7 +114,26 @@ app.get("/api/cached", (_req, res) => {
     if (Array.isArray(cached.results)) {
       cached.results = cached.results.map((r) => {
         const score = computeScore(r);
-        return { ...r, score, scoreLabel: scoreLabel(score) };
+
+        // Re-detect profile + security recs so rule changes apply without
+        // re-hitting the Cloudflare API. Pure functions, cheap.
+        const profileInfo = detectSiteProfile(r);
+        const enriched = {
+          ...r,
+          profile: profileInfo.profile,
+          profileSignals: profileInfo.signals,
+        };
+        const securityRecommendations = recommendSecurityOptimizations(enriched);
+        const securityScore = computeSecurityScore(securityRecommendations);
+
+        return {
+          ...enriched,
+          score,
+          scoreLabel: scoreLabel(score),
+          securityRecommendations,
+          securityScore,
+          securityScoreLabel: securityScoreLabel(securityScore),
+        };
       });
     }
     res.json(cached);
