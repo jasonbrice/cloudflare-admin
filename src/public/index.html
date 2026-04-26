@@ -62,6 +62,13 @@
   .score-chip.downgrade-critical { background: #86efac; color: #14532d; }
   .score-chip.downgrade-strong { background: #dcfce7; color: #166534; }
   .score-chip.downgrade-moderate { background: #d1fae5; color: #065f46; }
+  /* Security/optimization chip — distinct palette (purple/orange) so it doesn't
+     get mistaken for the plan-recommendation chip on the same card. */
+  .domain-card .sec-chip { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; margin-left: 4px; vertical-align: middle; letter-spacing: 0.02em; }
+  .sec-chip.critical { background: #c4b5fd; color: #4c1d95; }
+  .sec-chip.strong { background: #ddd6fe; color: #5b21b6; }
+  .sec-chip.moderate { background: #ede9fe; color: #6d28d9; }
+  .sec-chip.weak { background: #f3f4f6; color: #6b7280; }
 
   #pending { background: #fff; border-top: 1px solid #e0e0e0; padding: 16px 24px; display: none; }
   #pending.has-changes { display: block; }
@@ -177,6 +184,7 @@
       <option value="requests">Requests</option>
       <option value="bandwidth">Bandwidth</option>
       <option value="strength">Recommendation strength</option>
+      <option value="security">Security strength</option>
     </select>
   </label>
   <label>Min strength:
@@ -394,13 +402,24 @@ function renderAll() {
   const sortBy = document.getElementById("sort").value;
   const minStrength = document.getElementById("min-strength").value;
 
+  // Min-strength filter applies to whichever score the user is sorting by.
+  // Default: plan-recommendation score. When sorting by "security", the filter
+  // applies to the security score instead.
+  const scoreField = sortBy === "security" ? "securityScore" : "score";
+
   const filtered = allResults.filter(r => {
     if (search && !r.domain.toLowerCase().includes(search)) return false;
     if (minStrength === "actionable") {
-      if (r.status === "ok" || r.status === "error") return false;
+      // For plan-score: any non-ok/non-error status is actionable.
+      // For security-score: any non-zero security score is actionable.
+      if (scoreField === "securityScore") {
+        if (!(r.securityScore > 0)) return false;
+      } else {
+        if (r.status === "ok" || r.status === "error") return false;
+      }
     } else {
       const min = parseInt(minStrength, 10) || 0;
-      if (min > 0 && (r.score || 0) < min) return false;
+      if (min > 0 && (r[scoreField] || 0) < min) return false;
     }
     return true;
   });
@@ -416,6 +435,7 @@ function renderAll() {
   const sortFn = sortBy === "requests" ? (a,b) => b.monthlyRequests - a.monthlyRequests
     : sortBy === "bandwidth" ? (a,b) => b.monthlyBandwidth - a.monthlyBandwidth
     : sortBy === "strength" ? (a,b) => (b.score || 0) - (a.score || 0) || a.domain.localeCompare(b.domain)
+    : sortBy === "security" ? (a,b) => (b.securityScore || 0) - (a.securityScore || 0) || a.domain.localeCompare(b.domain)
     : (a,b) => a.domain.localeCompare(b.domain);
 
   for (const plan of Object.keys(byPlan)) {
@@ -453,11 +473,17 @@ function createCard(r) {
     const chipCls = r.status === "downgrade" && r.scoreLabel !== "weak"
       ? `downgrade-${r.scoreLabel}`
       : r.scoreLabel;
-    scoreChip = `<span class="score-chip ${chipCls}" title="Recommendation strength: ${r.score}/100">${r.scoreLabel.toUpperCase()} ${r.score}</span>`;
+    scoreChip = `<span class="score-chip ${chipCls}" title="Plan recommendation strength: ${r.score}/100">${r.scoreLabel.toUpperCase()} ${r.score}</span>`;
+  }
+
+  let secChip = "";
+  if (typeof r.securityScore === "number" && r.securityScore > 0 && r.securityScoreLabel) {
+    const recCount = (r.securityRecommendations || []).length;
+    secChip = `<span class="sec-chip ${r.securityScoreLabel}" title="Security &amp; optimization: ${recCount} recommendation${recCount === 1 ? "" : "s"} (${r.securityScore}/100)">SEC ${r.securityScore}</span>`;
   }
 
   card.innerHTML = `
-    <div class="domain-name">${escHtml(r.domain)}<span class="domain-badge ${badgeClass}">${badgeText}</span>${scoreChip}</div>
+    <div class="domain-name">${escHtml(r.domain)}<span class="domain-badge ${badgeClass}">${badgeText}</span>${scoreChip}${secChip}</div>
     <div class="domain-stats">
       <span>${fmtNum(r.monthlyRequests)} req/mo</span>
       <span>${fmtBytes(r.monthlyBandwidth)}/mo</span>
@@ -895,6 +921,59 @@ function headroomColor(pct) {
   return "green";
 }
 
+const PROFILE_LABELS = {
+  "dev-staging": "Dev / staging",
+  "parked": "Parked",
+  "email-only": "Email-only",
+  "static-cdn": "Static / CDN-friendly",
+  "dynamic-app": "Dynamic application",
+  "api": "API endpoint",
+  "high-traffic-prod": "High-traffic production",
+  "low-traffic-marketing": "Low-traffic marketing",
+};
+
+function renderSecuritySection(r) {
+  const recs = r.securityRecommendations || [];
+  const profileLabel = PROFILE_LABELS[r.profile] || r.profile || "Unclassified";
+
+  let html = `<div class="detail-section"><h3>Security &amp; Optimization</h3>`;
+  html += `<div style="font-size:12px; color:#666; margin-bottom:8px;">Site profile: <strong>${escHtml(profileLabel)}</strong>`;
+  if (typeof r.securityScore === "number" && r.securityScore > 0) {
+    html += ` &middot; Security score: <strong>${r.securityScore}/100 (${escHtml(r.securityScoreLabel)})</strong>`;
+  }
+  html += `</div>`;
+
+  if (!recs.length) {
+    html += `<ul><li>No actionable items detected for this domain.</li></ul></div>`;
+    return html;
+  }
+
+  // Group by category preserving severity order (recs are pre-sorted)
+  const byCategory = { security: [], performance: [] };
+  for (const rec of recs) {
+    if (byCategory[rec.category]) byCategory[rec.category].push(rec);
+  }
+
+  for (const cat of ["security", "performance"]) {
+    if (!byCategory[cat].length) continue;
+    html += `<div style="margin-top:8px;"><div style="font-size:12px; font-weight:600; color:#555; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.04em;">${cat}</div>`;
+    for (const rec of byCategory[cat]) {
+      html += `<div style="padding:8px 10px; margin-bottom:6px; border:1px solid #e5e7eb; border-radius:6px; background:#fafafa;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+          <span class="sec-chip ${escHtml(rec.severity)}" style="margin-left:0;">${escHtml(rec.severity.toUpperCase())}</span>
+          <span style="font-weight:600; font-size:13px;">${escHtml(rec.title)}</span>
+        </div>
+        <div style="font-size:12px; color:#555; line-height:1.4; margin-bottom:4px;">${escHtml(rec.why)}</div>
+        <div style="font-size:11px; color:#888; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;">${escHtml(rec.action)}</div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
 function showDetail(r) {
   const modal = document.getElementById("detail-modal");
   document.getElementById("modal-title").textContent = r.domain;
@@ -951,6 +1030,9 @@ function showDetail(r) {
     html += `<ul><li>No feature-based upgrade signals detected</li></ul>`;
   }
   html += `</div>`;
+
+  // Security & Optimization
+  html += renderSecuritySection(r);
 
   // Headroom
   if (r.headroom) {

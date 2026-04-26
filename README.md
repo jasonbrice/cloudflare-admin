@@ -98,8 +98,17 @@ Click any domain card in the dashboard to see:
 - **Plan comparison** — current vs. recommended plan with status and potential savings
 - **Traffic analysis** — human-readable reasoning for the traffic-based recommendation
 - **Feature requirements** — list of detected features driving the plan recommendation
+- **Security & Optimization** — see below
 - **Tier headroom** — color-coded bars showing how close to the next tier's limits (green < 60%, yellow 60–85%, red > 85%)
 - **Feature inventory** — checklist of all monitored features (WAF, firewall rules, SSL, rate limits, page rules, Workers, Polish, Mirage, Under Attack mode)
+
+### Security & Optimization Recommendations
+
+Each domain is classified into a *site profile* (e.g. `static-cdn`, `dev-staging`, `parked`, `api`, `email-only`) based on traffic patterns, cache hit ratio, DNS records, and naming. A ruleset then suggests security and performance improvements that fit the profile and the current plan tier — so you don't get told to "Enable Polish" on an API endpoint or to "Deploy WAF Managed Rules" on a parked domain.
+
+Recommendations are graded by severity (`critical` / `strong` / `moderate` / `weak`) and aggregated into a 0–100 **security score** shown as a purple chip on the domain card. Use the toolbar's **Sort by → Security strength** option to surface the highest-impact domains. The **Min strength** filter applies to whichever score is currently being sorted (plan or security).
+
+Click a card to see the full recommendation list with rationale ("why this matters for *this* domain") and an action path (where in Cloudflare's UI to make the change). All recommendations are read-only — the app never modifies your Cloudflare configuration.
 
 ## DNS Zone Backups
 

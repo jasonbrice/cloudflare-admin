@@ -395,21 +395,110 @@ async function getZoneWorkersRoutes(zoneId) {
   }
 }
 
+// Summarizes DNS records for use by the security/optimization recommendation
+// engine. Cheap (single REST call) and conservatively returns an empty summary
+// on failure so analysis never breaks if DNS:Read is missing.
+async function getZoneDnsRecords(zoneName, zoneId) {
+  const empty = {
+    count: 0,
+    hasMx: false,
+    hasSpf: false,
+    hasDmarc: false,
+    subdomainCount: 0,
+    apiSubdomainCount: 0,
+  };
+  try {
+    const data = await apiGet(`/zones/${zoneId}/dns_records?per_page=100`);
+    const records = data.result || [];
+    if (!records.length) return empty;
+
+    const subdomains = new Set();
+    let hasMx = false;
+    let hasSpf = false;
+    let hasDmarc = false;
+
+    for (const r of records) {
+      if (r.type === "MX") hasMx = true;
+
+      // SPF lives in a TXT record on the apex starting with "v=spf1"
+      if (r.type === "TXT" && /v=spf1/i.test(r.content || "")) hasSpf = true;
+
+      // DMARC lives in a TXT record at _dmarc.<domain>
+      if (
+        r.type === "TXT" &&
+        /^_dmarc\./i.test(r.name || "") &&
+        /v=DMARC1/i.test(r.content || "")
+      ) {
+        hasDmarc = true;
+      }
+
+      // Track subdomains (anything beyond the apex). Strip trailing dot if any.
+      if (
+        (r.type === "A" || r.type === "AAAA" || r.type === "CNAME") &&
+        r.name &&
+        r.name.toLowerCase() !== zoneName.toLowerCase()
+      ) {
+        subdomains.add(r.name.toLowerCase());
+      }
+    }
+
+    let apiSubdomainCount = 0;
+    for (const sub of subdomains) {
+      const label = sub.split(".")[0];
+      if (/^(api|service|services|app|graphql|grpc)$/i.test(label)) {
+        apiSubdomainCount++;
+      }
+    }
+
+    return {
+      count: records.length,
+      hasMx,
+      hasSpf,
+      hasDmarc,
+      subdomainCount: subdomains.size,
+      apiSubdomainCount,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+async function getZoneDnssec(zoneId) {
+  try {
+    const data = await apiGet(`/zones/${zoneId}/dnssec`);
+    return { status: data.result?.status || "unknown" };
+  } catch {
+    return { status: "unknown" };
+  }
+}
+
 async function collectZoneData(zone, days = 30, onProgress) {
   if (onProgress) onProgress(`Analyzing ${zone.name}...`);
 
   // Run all API calls for this zone in parallel — they are independent
-  const [analytics, cachedBytes, settings, firewall, certs, rateLimits, pageRules, workersRoutes] =
-    await Promise.all([
-      getZoneAnalytics(zone.id, days),
-      getZoneCacheAnalytics(zone.id, days),
-      getZoneSettings(zone.id),
-      getZoneFirewallRules(zone.id),
-      getZoneCustomCertificates(zone.id),
-      getZoneRateLimits(zone.id),
-      getZonePageRules(zone.id),
-      getZoneWorkersRoutes(zone.id),
-    ]);
+  const [
+    analytics,
+    cachedBytes,
+    settings,
+    firewall,
+    certs,
+    rateLimits,
+    pageRules,
+    workersRoutes,
+    dns,
+    dnssec,
+  ] = await Promise.all([
+    getZoneAnalytics(zone.id, days),
+    getZoneCacheAnalytics(zone.id, days),
+    getZoneSettings(zone.id),
+    getZoneFirewallRules(zone.id),
+    getZoneCustomCertificates(zone.id),
+    getZoneRateLimits(zone.id),
+    getZonePageRules(zone.id),
+    getZoneWorkersRoutes(zone.id),
+    getZoneDnsRecords(zone.name, zone.id),
+    getZoneDnssec(zone.id),
+  ]);
 
   analytics.cachedBytes = cachedBytes;
 
@@ -422,6 +511,8 @@ async function collectZoneData(zone, days = 30, onProgress) {
     rateLimits,
     pageRules,
     workersRoutes,
+    dns,
+    dnssec,
   };
 }
 
@@ -435,6 +526,8 @@ module.exports = {
   getZonePageRules,
   getZoneWorkersRoutes,
   getZoneFileExport,
+  getZoneDnsRecords,
+  getZoneDnssec,
   collectZoneData,
   runPool,
   getToken,
