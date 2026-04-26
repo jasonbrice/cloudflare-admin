@@ -125,6 +125,16 @@ node src/index.js --backup
 
 Or click the **Backup Zones to Azure** button in the dashboard. A modal shows live progress and a final summary with the run ID.
 
+### Scheduled backups
+
+A GitHub Actions workflow at `.github/workflows/scheduled-backup.yml` runs the CLI backup on a daily schedule (07:00 UTC by default — adjust the `cron` line to suit). It reuses the `production` environment, so make sure these secrets are configured there:
+
+- `CLOUDFLARE_API_TOKEN` (with `Zone:DNS:Read`)
+- `AZURE_STORAGE_CONNECTION_STRING`
+- `AZURE_STORAGE_CONTAINER` *(optional, as a variable not a secret; defaults to `cloudflare-zone-backups`)*
+
+You can also trigger a run on demand via the **Run workflow** button on the Actions tab. GitHub emails the repo's failure-notification recipients on failed runs.
+
 ### What gets stored
 
 ```
