@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Cloudflare Domain Plan Analyzer</title>
+<title>Cloudflare Domain Analyzer</title>
 <link rel="icon" type="image/x-icon" href="/favicon.ico">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png">
@@ -13,12 +13,23 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #1a1a1a; }
 
-  header { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
-  header h1 { font-size: 20px; font-weight: 600; }
-  .header-stats { display: flex; gap: 24px; font-size: 14px; color: #555; }
-  .header-stats span { display: flex; align-items: center; gap: 6px; }
+  header { background: #fff; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06); padding: 14px 28px; display: flex; align-items: center; justify-content: space-between; gap: 24px; position: relative; z-index: 5; }
+  header h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.015em; color: #0f172a; display: inline-flex; align-items: center; gap: 12px; }
+  header h1 .header-logo { width: 28px; height: 28px; flex-shrink: 0; }
+  .header-stats { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #475569; }
+  .header-stats > span { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; background: #f1f5f9; border-radius: 999px; line-height: 1; }
+  .header-stats .stat-icon { width: 13px; height: 13px; opacity: 0.65; flex-shrink: 0; }
+  .header-stats #stat-savings:not(:empty) { background: #dcfce7; color: #166534; font-weight: 500; }
+  .header-stats #stat-savings.cost-increase { background: #fee2e2; color: #991b1b; }
+  .header-stats #data-timestamp:empty { display: none; }
+  .header-stats #data-timestamp { background: transparent; color: #94a3b8; font-size: 12px; padding: 0 4px; }
 
-  .toolbar { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 10px 24px; display: flex; align-items: center; gap: 16px; }
+  .toolbar { background: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); padding: 10px 28px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .toolbar .toolbar-group { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+  .toolbar .toolbar-group label { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: #475569; }
+  .toolbar .toolbar-group label .label-text { font-weight: 500; }
+  .toolbar .toolbar-divider { width: 1px; height: 22px; background: #e2e8f0; margin: 0 4px; }
+  .toolbar .toolbar-spacer { flex: 1; }
   .toolbar input[type="text"] { padding: 6px 12px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 14px; width: 240px; }
   .toolbar select { padding: 6px 10px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 14px; }
   .toolbar button { padding: 6px 14px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 14px; background: #fff; cursor: pointer; }
@@ -176,11 +187,21 @@
 <body>
 
 <header>
-  <h1>Cloudflare Domain Plan Analyzer</h1>
+  <h1>
+    <img src="/favicon.svg" alt="" class="header-logo">
+    Cloudflare Domain Analyzer
+  </h1>
   <div class="header-stats">
-    <span id="stat-total"></span>
-    <span id="stat-enterprise"></span>
+    <span id="stat-total" title="Total domains">
+      <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+      <span data-text></span>
+    </span>
+    <span id="stat-enterprise" title="Enterprise slots used">
+      <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 15 8.5 22 9.3 17 14 18.2 21 12 17.8 5.8 21 7 14 2 9.3 9 8.5z"/></svg>
+      <span data-text></span>
+    </span>
     <span id="stat-savings"></span>
+    <span id="data-timestamp"></span>
     <span class="user-badge" id="user-badge" title="Authenticated user">
       <span class="user-dot"></span>
       <span class="user-name" id="user-name"></span>
@@ -200,34 +221,36 @@
       <option value="performance">Performance strength</option>
     </select>
   </label>
-  <label>Plan strength:
-    <select id="min-strength">
-      <option value="0">All</option>
-      <option value="40">Moderate+</option>
-      <option value="65">Strong+</option>
-      <option value="85">Critical only</option>
-      <option value="actionable">Any actionable</option>
-    </select>
-  </label>
-  <label>Security strength:
-    <select id="min-sec-strength">
-      <option value="0">All</option>
-      <option value="40">Moderate+</option>
-      <option value="65">Strong+</option>
-      <option value="85">Critical only</option>
-      <option value="actionable">Any with recs</option>
-    </select>
-  </label>
-  <label>Performance strength:
-    <select id="min-perf-strength">
-      <option value="0">All</option>
-      <option value="40">Moderate+</option>
-      <option value="65">Strong+</option>
-      <option value="85">Critical only</option>
-      <option value="actionable">Any with recs</option>
-    </select>
-  </label>
-  <span id="data-timestamp" style="font-size:12px; color:#888; margin-left:auto;"></span>
+  <span class="toolbar-group" aria-label="Minimum strength filters">
+    <label><span class="label-text">Plan</span>
+      <select id="min-strength">
+        <option value="0">All</option>
+        <option value="40">Moderate+</option>
+        <option value="65">Strong+</option>
+        <option value="85">Critical only</option>
+        <option value="actionable">Any actionable</option>
+      </select>
+    </label>
+    <label><span class="label-text">Security</span>
+      <select id="min-sec-strength">
+        <option value="0">All</option>
+        <option value="40">Moderate+</option>
+        <option value="65">Strong+</option>
+        <option value="85">Critical only</option>
+        <option value="actionable">Any with recs</option>
+      </select>
+    </label>
+    <label><span class="label-text">Performance</span>
+      <select id="min-perf-strength">
+        <option value="0">All</option>
+        <option value="40">Moderate+</option>
+        <option value="65">Strong+</option>
+        <option value="85">Critical only</option>
+        <option value="actionable">Any with recs</option>
+      </select>
+    </label>
+  </span>
+  <span class="toolbar-spacer"></span>
   <button id="btn-export-all">Export All</button>
   <span class="split-button" id="backup-split">
     <button id="btn-backup" class="split-main">Backup Zones to Azure</button>
@@ -355,7 +378,9 @@ function showTimestamp(isoString) {
   else if (diffHrs < 24) ago = `${diffHrs}h ago`;
   else ago = `${Math.floor(diffHrs / 24)}d ago`;
 
-  el.textContent = `Data from ${dt.toLocaleDateString()} ${dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} (${ago})`;
+  // Compact form for the header pill; full timestamp lives in the title attr
+  el.textContent = `Updated ${ago}`;
+  el.title = `Data from ${dt.toLocaleDateString()} ${dt.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;
 }
 
 // --- Data loading ---
@@ -667,12 +692,20 @@ function updateStats() {
     savingsDelta += oldPrice - newPrice;
   }
 
-  document.getElementById("stat-total").textContent = `${total} domains`;
-  document.getElementById("stat-enterprise").textContent = `Enterprise: ${entCount}/${enterpriseSlots} slots`;
-  document.getElementById("stat-savings").textContent = savingsDelta > 0
-    ? `Pending savings: $${savingsDelta}/mo`
+  // Stats use [data-text] inner spans so the SVG icons remain in the DOM
+  const setStatText = (id, text) => {
+    const host = document.getElementById(id);
+    const target = host.querySelector("[data-text]") || host;
+    target.textContent = text;
+  };
+  setStatText("stat-total", `${total} domains`);
+  setStatText("stat-enterprise", `Enterprise: ${entCount}/${enterpriseSlots}`);
+  const savingsEl = document.getElementById("stat-savings");
+  savingsEl.classList.toggle("cost-increase", savingsDelta < 0);
+  savingsEl.textContent = savingsDelta > 0
+    ? `Save $${savingsDelta}/mo`
     : savingsDelta < 0
-      ? `Pending cost increase: +$${Math.abs(savingsDelta)}/mo`
+      ? `+$${Math.abs(savingsDelta)}/mo cost`
       : "";
 }
 
