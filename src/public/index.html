@@ -583,13 +583,13 @@ function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 function escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 // Map a severity label (critical/strong/moderate/weak/"") to a status-dot
-// color class. Used by both card lines for consistent traffic-light coloring.
-// "weak" means recs exist but are low priority -> grey (not green, which is
-// reserved for the truly-nothing-to-do state).
+// color class. Pure traffic-light vocabulary at the overview level — no grey
+// for the recommendation severities. Grey is reserved for genuinely-no-info
+// states (error / unclassified) handled at the call site.
 function severityToDot(label) {
   if (label === "critical" || label === "strong") return "dot-red";
   if (label === "moderate") return "dot-yellow";
-  if (label === "weak") return "dot-grey";
+  if (label === "weak") return "dot-green";
   return "dot-grey";
 }
 
