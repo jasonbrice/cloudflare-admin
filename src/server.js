@@ -13,7 +13,7 @@ const {
   securityScoreLabel,
   performanceScoreLabel,
 } = require("./security-rules");
-const { backupAllZones } = require("./backup");
+const { backupAllZones, buildZoneBackupZip } = require("./backup");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -273,6 +273,26 @@ app.get("/api/backup", async (_req, res) => {
   }
 
   res.end();
+});
+
+// Download all zones' BIND files as a single ZIP. No external dependencies —
+// works against any Cloudflare account with DNS:Read on the token. Requested
+// directly via window.location for the standard browser download flow; the
+// server holds the zip in memory (small for our scale) and ships it in one go.
+app.get("/api/backup-zip", async (_req, res) => {
+  try {
+    const { buffer, filename, summary } = await buildZoneBackupZip();
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("X-Backup-Run-Id", summary.runId);
+    res.setHeader("X-Backup-Total", String(summary.total));
+    res.setHeader("X-Backup-Succeeded", String(summary.succeeded));
+    res.setHeader("X-Backup-Failed", String(summary.failed));
+    res.send(buffer);
+  } catch (err) {
+    // Headers may not be set yet — safe to send a JSON error.
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Per-zone audit log proxy. Looks up the domain's accountId from the cache and

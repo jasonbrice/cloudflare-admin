@@ -54,7 +54,7 @@ Features:
 - Search and sort (by name, requests, or bandwidth)
 - Pending changes panel with estimated savings
 - Live progress bar during initial data load
-- **Backup Zones to Azure** button to snapshot all DNS zone files to Azure Blob Storage (see [DNS Zone Backups](#dns-zone-backups))
+- **Backup Zones to Azure** split-button — snapshot all DNS zone files to Azure Blob Storage, download all zones as a single ZIP, or view the last backup's details (see [DNS Zone Backups](#dns-zone-backups))
 
 ## How It Works
 
@@ -129,12 +129,17 @@ The app can export every Cloudflare zone's DNS records as a BIND-format zone fil
 
 ### Running a backup
 
-CLI:
+The **Backup Zones to Azure** split-button in the dashboard offers three options via the chevron menu:
+
+- **Back up now** — kicks off the same Azure-backed backup as the CLI (`node src/index.js --backup`). Live progress modal, ends with a summary card.
+- **Download all as .zip** — assembles every zone's BIND file into a single ZIP that downloads to your browser. No Azure required (the endpoint only needs `CLOUDFLARE_API_TOKEN` with `Zone:DNS:Read`). The zip contains a date-stamped folder with one `<domain>.zone` file per zone plus a `manifest.json`. Useful for ad-hoc snapshots or for users who don't have Azure configured.
+- **Last Backup Details** — shows the run metadata from the most recent Azure backup, with a copy-to-clipboard summary.
+
+The Azure CLI flag is unchanged:
+
 ```bash
 node src/index.js --backup
 ```
-
-Or click the **Backup Zones to Azure** button in the dashboard. A modal shows live progress and a final summary with the run ID.
 
 ### Scheduled backups
 
