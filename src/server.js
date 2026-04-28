@@ -323,7 +323,13 @@ app.get("/api/audit/:domain", async (req, res) => {
     AUDIT_CACHE.set(cacheKey, { at: now, payload });
     res.json(payload);
   } catch (err) {
-    res.status(500).json({ error: err.message || String(err) });
+    const msg = err?.message || String(err);
+    // Help operators diagnose the most common misconfiguration: missing scope
+    const friendly =
+      /403|Authentication error|forbidden/i.test(msg)
+        ? `${msg} — the API token is missing audit log access. Add either "Account → Audit Logs → Read" or "Account → Account Settings → Read" to the token at https://dash.cloudflare.com/profile/api-tokens.`
+        : msg;
+    res.status(500).json({ error: friendly });
   }
 });
 

@@ -473,9 +473,16 @@ async function getZoneDnssec(zoneId) {
 }
 
 // Fetches the Cloudflare audit log for a zone via the account-scoped audit
-// log endpoint, filtered by zone name. Requires the Account → Audit Logs →
-// Read permission on the API token (NOT included in the analyzer's default
-// scopes — operators must add it explicitly).
+// log endpoint (legacy v1: /accounts/:id/audit_logs), filtered by zone name.
+//
+// Required token permission (one of, depending on what the dashboard exposes
+// for your account tier):
+//   • Account → Audit Logs → Read   (when present in the permission picker)
+//   • Account → Account Settings → Read   (works as a fallback on accounts
+//       where "Audit Logs" isn't an available scope — verified empirically)
+// Neither is in the analyzer's default scopes — operators must add one
+// explicitly. The 403 response from CF is surfaced verbatim by the server
+// endpoint so misconfigurations are obvious.
 //
 // `since` is an ISO-8601 string; defaults to 90 days ago. Pagination is
 // auto-followed up to `maxPages` (50 records per page).
