@@ -3,7 +3,7 @@ require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
-const { listZones, collectZoneData, runPool } = require("./cloudflare");
+const { listZones, collectZoneData, runPool, getZoneAuditLog } = require("./cloudflare");
 const { analyze, assignEnterpriseSlots, computeScore, scoreLabel } = require("./analyzer");
 const { detectSiteProfile } = require("./site-profile");
 const {
@@ -273,6 +273,58 @@ app.get("/api/backup", async (_req, res) => {
   }
 
   res.end();
+});
+
+// Per-zone audit log proxy. Looks up the domain's accountId from the cache and
+// queries Cloudflare's /accounts/:id/audit_logs endpoint filtered by zone name.
+//
+// Requires the API token to have Account → Audit Logs → Read. Without that
+// scope Cloudflare returns 403 and we surface the error verbatim so the user
+// knows to add the permission. Old caches without accountId surface a
+// helpful "refresh data" error instead of a confusing 404.
+//
+// Results are cached in-memory for 60s per (account, domain) to avoid
+// hammering the API when the user opens/closes the drawer repeatedly.
+const AUDIT_CACHE = new Map();
+const AUDIT_TTL_MS = 60 * 1000;
+
+app.get("/api/audit/:domain", async (req, res) => {
+  const domain = req.params.domain;
+  const cacheKey = domain.toLowerCase();
+  const now = Date.now();
+  const cached = AUDIT_CACHE.get(cacheKey);
+  if (cached && now - cached.at < AUDIT_TTL_MS) {
+    res.json({ ...cached.payload, cached: true });
+    return;
+  }
+
+  const cache = loadCache();
+  const result = cache?.results?.find(
+    (r) => r.domain && r.domain.toLowerCase() === cacheKey
+  );
+  if (!result) {
+    res.status(404).json({ error: `Domain ${domain} not found in cache.` });
+    return;
+  }
+  if (!result.accountId) {
+    res.status(409).json({
+      error:
+        "This domain has no accountId in the cached analysis. Click \"Refresh Data\" to re-analyze and try again.",
+    });
+    return;
+  }
+
+  try {
+    const entries = await getZoneAuditLog(result.accountId, domain, {
+      maxPages: 4,
+      perPage: 50,
+    });
+    const payload = { domain, count: entries.length, entries };
+    AUDIT_CACHE.set(cacheKey, { at: now, payload });
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
 });
 
 // Returns the most recent successful backup summary (or { summary: null })

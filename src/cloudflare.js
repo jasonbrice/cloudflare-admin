@@ -472,6 +472,34 @@ async function getZoneDnssec(zoneId) {
   }
 }
 
+// Fetches the Cloudflare audit log for a zone via the account-scoped audit
+// log endpoint, filtered by zone name. Requires the Account → Audit Logs →
+// Read permission on the API token (NOT included in the analyzer's default
+// scopes — operators must add it explicitly).
+//
+// `since` is an ISO-8601 string; defaults to 90 days ago. Pagination is
+// auto-followed up to `maxPages` (50 records per page).
+async function getZoneAuditLog(accountId, zoneName, opts = {}) {
+  const { since, maxPages = 4, perPage = 50 } = opts;
+  const sinceParam = since
+    ? `&since=${encodeURIComponent(since)}`
+    : `&since=${encodeURIComponent(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())}`;
+
+  const all = [];
+  for (let page = 1; page <= maxPages; page++) {
+    const data = await apiGet(
+      `/accounts/${accountId}/audit_logs?per_page=${perPage}&page=${page}&zone.name=${encodeURIComponent(zoneName)}${sinceParam}`
+    );
+    const items = data.result || [];
+    all.push(...items);
+    const info = data.result_info || {};
+    if (!info.total_pages || info.page >= info.total_pages) break;
+    if (items.length < perPage) break;
+    await delay();
+  }
+  return all;
+}
+
 async function collectZoneData(zone, days = 30, onProgress) {
   if (onProgress) onProgress(`Analyzing ${zone.name}...`);
 
@@ -528,6 +556,7 @@ module.exports = {
   getZoneFileExport,
   getZoneDnsRecords,
   getZoneDnssec,
+  getZoneAuditLog,
   collectZoneData,
   runPool,
   getToken,

@@ -369,6 +369,8 @@ function analyze(zoneData) {
 
   const base = {
     domain: zoneData.name,
+    zoneId: zoneData.id,
+    accountId: zoneData.accountId,
     currentPlan: currentPlanId,
     currentPrice,
     recommendedPlan,
