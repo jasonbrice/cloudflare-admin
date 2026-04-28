@@ -178,6 +178,39 @@
   .feature-icon.on { color: #16a34a; }
   .feature-icon.off { color: #d1d5db; }
 
+  /* Audit history drawer (slides in from the right) */
+  .drawer-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 1100; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
+  .drawer-overlay.open { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: 540px; max-width: 95vw; background: #fff; box-shadow: -4px 0 24px rgba(0,0,0,0.18); z-index: 1101; display: flex; flex-direction: column; transform: translateX(100%); transition: transform 0.25s ease; }
+  .drawer.open { transform: translateX(0); }
+  .drawer-header { padding: 16px 20px; border-bottom: 1px solid #e5e7eb; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .drawer-header h2 { font-size: 16px; font-weight: 700; color: #0f172a; margin: 0; }
+  .drawer-header .drawer-sub { font-size: 12px; color: #64748b; margin-top: 2px; }
+  .drawer-close { background: none; border: none; font-size: 22px; cursor: pointer; color: #94a3b8; padding: 0 4px; line-height: 1; }
+  .drawer-close:hover { color: #0f172a; }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 8px 16px 24px; }
+  .drawer-status { padding: 24px 16px; text-align: center; color: #64748b; font-size: 13px; }
+  .drawer-status.error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; margin: 8px 4px; padding: 14px; text-align: left; }
+
+  .audit-entry { border-bottom: 1px solid #f1f5f9; padding: 12px 4px; font-size: 13px; }
+  .audit-entry:last-child { border-bottom: none; }
+  .audit-entry .audit-row1 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .audit-entry .audit-action { font-weight: 600; color: #0f172a; }
+  .audit-entry .audit-when { font-size: 11px; color: #94a3b8; flex-shrink: 0; white-space: nowrap; }
+  .audit-entry .audit-resource { font-size: 12px; color: #475569; margin-top: 3px; word-break: break-word; }
+  .audit-entry .audit-actor { font-size: 11px; color: #64748b; margin-top: 4px; display: flex; align-items: center; gap: 6px; }
+  .audit-entry .audit-actor-type { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-weight: 500; text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; color: #475569; }
+  .audit-entry details { margin-top: 6px; }
+  .audit-entry summary { cursor: pointer; font-size: 11px; color: #2563eb; user-select: none; }
+  .audit-entry summary:hover { text-decoration: underline; }
+  .audit-entry pre { margin-top: 4px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; font-size: 11px; line-height: 1.4; color: #334155; max-height: 200px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+
+  /* Modal header tertiary action (e.g. "History" link) */
+  .modal-header-actions { display: flex; align-items: center; gap: 8px; }
+  .modal-header-actions .modal-link-btn { background: none; border: 1px solid #e2e8f0; border-radius: 6px; cursor: pointer; font-size: 12px; color: #475569; padding: 4px 10px; font-weight: 500; }
+  .modal-header-actions .modal-link-btn:hover { background: #f8fafc; color: #0f172a; }
+  .modal-header-actions .modal-link-btn:disabled { opacity: 0.5; cursor: not-allowed; background: #fff; color: #94a3b8; }
+
   .header-stats .user-badge { display: none; align-items: center; gap: 8px; font-size: 13px; color: #374151; background: #f3f4f6; border: 1px solid #e5e7eb; padding: 4px 10px; border-radius: 999px; }
   .header-stats .user-badge.visible { display: inline-flex; }
   .user-badge .user-dot { width: 7px; height: 7px; border-radius: 50%; background: #16a34a; }
@@ -302,11 +335,29 @@
   <div class="modal">
     <div class="modal-header">
       <h2 id="modal-title"></h2>
-      <button class="modal-close" id="modal-close-btn">&times;</button>
+      <div class="modal-header-actions">
+        <button type="button" class="modal-link-btn" id="modal-history-btn" title="View Cloudflare audit history for this domain">History</button>
+        <button class="modal-close" id="modal-close-btn">&times;</button>
+      </div>
     </div>
     <div class="modal-body" id="modal-body"></div>
   </div>
 </div>
+
+<!-- Audit history drawer (Cloudflare audit log per zone) -->
+<div id="audit-overlay" class="drawer-overlay"></div>
+<aside id="audit-drawer" class="drawer" aria-labelledby="audit-drawer-title" aria-hidden="true">
+  <div class="drawer-header">
+    <div>
+      <h2 id="audit-drawer-title">Audit History</h2>
+      <div class="drawer-sub" id="audit-drawer-sub"></div>
+    </div>
+    <button type="button" class="drawer-close" id="audit-close-btn" aria-label="Close audit history">&times;</button>
+  </div>
+  <div class="drawer-body" id="audit-drawer-body">
+    <div class="drawer-status">Loading…</div>
+  </div>
+</aside>
 
 <div id="backup-modal" class="modal-overlay hidden">
   <div class="modal" style="width: 560px;">
@@ -1100,6 +1151,17 @@ function renderSecuritySection(r) {
 function showDetail(r) {
   const modal = document.getElementById("detail-modal");
   document.getElementById("modal-title").textContent = r.domain;
+  _modalDomain = r.domain;
+  // Disable the History button if we don't have an accountId for this domain
+  // (older cached results pre-dating the audit feature won't have it).
+  const histBtn = document.getElementById("modal-history-btn");
+  if (r.accountId) {
+    histBtn.disabled = false;
+    histBtn.title = "View Cloudflare audit history for this domain";
+  } else {
+    histBtn.disabled = true;
+    histBtn.title = "Audit history requires re-running analysis (Refresh Data) so account info is captured";
+  }
 
   const statusLabel = r.status === "ok" ? "No change needed"
     : r.status === "downgrade" ? "Downgrade recommended"
@@ -1217,6 +1279,7 @@ function showDetail(r) {
 
 function closeModal() {
   document.getElementById("detail-modal").classList.add("hidden");
+  _modalDomain = null;
 }
 
 document.getElementById("modal-close-btn").addEventListener("click", closeModal);
@@ -1224,7 +1287,140 @@ document.getElementById("detail-modal").addEventListener("click", (e) => {
   if (e.target === e.currentTarget) closeModal();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeModal();
+  if (e.key === "Escape") {
+    closeAuditDrawer();
+    closeModal();
+  }
+});
+
+// --- Audit history drawer ---
+// Currently-open domain so the modal "History" button knows what to fetch
+let _modalDomain = null;
+
+function relTime(iso) {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return "";
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+function fmtAuditAction(entry) {
+  // Cloudflare returns action.type ("create"/"update"/"delete"/etc) and
+  // action.info (a free-form short description). Prefer info, fall back to type.
+  return entry?.action?.info || entry?.action?.type || "unknown action";
+}
+
+function fmtAuditResource(entry) {
+  const r = entry?.resource;
+  if (!r) return "";
+  const type = r.type || "resource";
+  return r.id ? `${type} ${r.id}` : type;
+}
+
+function fmtAuditActor(entry) {
+  const a = entry?.actor || {};
+  const label = a.email || a.id || "Cloudflare system";
+  const type = a.type ? a.type.toLowerCase() : "";
+  return { label, type, ip: a.ip };
+}
+
+function renderAuditEntries(entries) {
+  const body = document.getElementById("audit-drawer-body");
+  if (!entries.length) {
+    body.innerHTML = `<div class="drawer-status">No audit events found in the last 90 days.</div>`;
+    return;
+  }
+  const html = entries.map((e) => {
+    const action = escHtml(fmtAuditAction(e));
+    const when = escHtml(relTime(e.when));
+    const whenAbs = escHtml(new Date(e.when).toLocaleString());
+    const resource = escHtml(fmtAuditResource(e));
+    const actor = fmtAuditActor(e);
+    const actorLabel = escHtml(actor.label);
+    const actorType = actor.type ? `<span class="audit-actor-type">${escHtml(actor.type)}</span>` : "";
+    const actorIp = actor.ip ? ` · ${escHtml(actor.ip)}` : "";
+
+    let details = "";
+    const hasOld = e.oldValue !== undefined && e.oldValue !== null && e.oldValue !== "";
+    const hasNew = e.newValue !== undefined && e.newValue !== null && e.newValue !== "";
+    const hasMeta = e.metadata && Object.keys(e.metadata).length > 0;
+    if (hasOld || hasNew || hasMeta) {
+      const blob = JSON.stringify(
+        {
+          ...(hasOld ? { oldValue: e.oldValue } : {}),
+          ...(hasNew ? { newValue: e.newValue } : {}),
+          ...(hasMeta ? { metadata: e.metadata } : {}),
+        },
+        null,
+        2
+      );
+      details = `<details><summary>Show details</summary><pre>${escHtml(blob)}</pre></details>`;
+    }
+
+    return `
+      <div class="audit-entry">
+        <div class="audit-row1">
+          <span class="audit-action">${action}</span>
+          <span class="audit-when" title="${whenAbs}">${when}</span>
+        </div>
+        ${resource ? `<div class="audit-resource">${resource}</div>` : ""}
+        <div class="audit-actor">${actorType}<span>${actorLabel}${actorIp}</span></div>
+        ${details}
+      </div>
+    `;
+  }).join("");
+  body.innerHTML = html;
+}
+
+async function openAuditDrawer(domain) {
+  if (!domain) return;
+  const drawer = document.getElementById("audit-drawer");
+  const overlay = document.getElementById("audit-overlay");
+  const sub = document.getElementById("audit-drawer-sub");
+  const body = document.getElementById("audit-drawer-body");
+
+  document.getElementById("audit-drawer-title").textContent = `Audit History — ${domain}`;
+  sub.textContent = "Fetching from Cloudflare…";
+  body.innerHTML = `<div class="drawer-status">Loading…</div>`;
+  drawer.classList.add("open");
+  drawer.setAttribute("aria-hidden", "false");
+  overlay.classList.add("open");
+
+  try {
+    const resp = await fetch(`/api/audit/${encodeURIComponent(domain)}`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      body.innerHTML = `<div class="drawer-status error">${escHtml(data.error || `Request failed (${resp.status})`)}</div>`;
+      sub.textContent = "";
+      return;
+    }
+    sub.textContent = `${data.count} event${data.count === 1 ? "" : "s"} · last 90 days${data.cached ? " · cached" : ""}`;
+    renderAuditEntries(data.entries || []);
+  } catch (err) {
+    body.innerHTML = `<div class="drawer-status error">${escHtml(err.message || String(err))}</div>`;
+    sub.textContent = "";
+  }
+}
+
+function closeAuditDrawer() {
+  document.getElementById("audit-drawer").classList.remove("open");
+  document.getElementById("audit-drawer").setAttribute("aria-hidden", "true");
+  document.getElementById("audit-overlay").classList.remove("open");
+}
+
+document.getElementById("audit-close-btn").addEventListener("click", closeAuditDrawer);
+document.getElementById("audit-overlay").addEventListener("click", closeAuditDrawer);
+document.getElementById("modal-history-btn").addEventListener("click", () => {
+  if (_modalDomain) openAuditDrawer(_modalDomain);
 });
 
 // --- Authenticated user badge (App Service Easy Auth) ---
