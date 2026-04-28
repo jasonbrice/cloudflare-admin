@@ -290,6 +290,7 @@
     <button id="btn-backup-toggle" class="split-toggle" aria-haspopup="menu" aria-expanded="false" title="More backup options">&#x25BE;</button>
     <div class="split-menu hidden" id="backup-menu" role="menu">
       <button type="button" id="menu-backup-now" role="menuitem">Back up now</button>
+      <button type="button" id="menu-backup-zip" role="menuitem">Download all as .zip</button>
       <button type="button" id="menu-backup-last" role="menuitem">Last Backup Details</button>
     </div>
   </span>
@@ -389,6 +390,24 @@
         <button type="button" id="btn-copy-last-backup" style="padding: 6px 14px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 13px; background: #fff; cursor: pointer;">Copy to Clipboard</button>
         <span id="copy-status" style="font-size: 12px; color: #16a34a;"></span>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="zip-modal" class="modal-overlay hidden">
+  <div class="modal" style="width: 480px;">
+    <div class="modal-header">
+      <h2>Download zone backups (.zip)</h2>
+      <button class="modal-close" id="zip-close-btn">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="zip-status" style="font-size: 14px; color: #555; margin-bottom: 12px;">
+        Preparing ZIP — this fetches every zone's BIND file from Cloudflare. Allow ~30 seconds for ~150 zones.
+      </div>
+      <div class="bar-container" style="width: 100%; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; margin-bottom: 12px;">
+        <div id="zip-bar" style="height: 100%; background: #2563eb; border-radius: 4px; transition: width 0.2s; width: 0%;"></div>
+      </div>
+      <div id="zip-summary" style="font-size: 13px; color: #666;"></div>
     </div>
   </div>
 </div>
@@ -995,9 +1014,89 @@ document.getElementById("menu-backup-now").addEventListener("click", () => {
   openBackupModal();
 });
 
+document.getElementById("menu-backup-zip").addEventListener("click", () => {
+  setBackupMenuOpen(false);
+  triggerZipDownload();
+});
+
 document.getElementById("menu-backup-last").addEventListener("click", () => {
   setBackupMenuOpen(false);
   openLastBackupModal();
+});
+
+// --- ZIP Download Modal ---
+// Hits /api/backup-zip via fetch (so we can read the X-Backup-* response
+// headers to show a summary), then turns the response body into a Blob and
+// triggers the browser download. The endpoint is intentionally synchronous
+// — for ~150 zones it's quick enough that a determinate progress bar isn't
+// worth the complexity. We animate an indeterminate bar to keep things lively.
+async function triggerZipDownload() {
+  const modal = document.getElementById("zip-modal");
+  const status = document.getElementById("zip-status");
+  const bar = document.getElementById("zip-bar");
+  const summaryEl = document.getElementById("zip-summary");
+  modal.classList.remove("hidden");
+  status.textContent = "Preparing ZIP — fetching every zone's BIND file from Cloudflare...";
+  bar.style.background = "#2563eb";
+  bar.style.width = "0%";
+  summaryEl.textContent = "";
+
+  // Fake progress animation since the underlying call is one big request.
+  // Inches up to 90% over ~25s, then snaps to 100% on response.
+  let pct = 0;
+  const ticker = setInterval(() => {
+    pct = Math.min(90, pct + (90 - pct) * 0.05);
+    bar.style.width = pct + "%";
+  }, 250);
+
+  try {
+    const res = await fetch("/api/backup-zip");
+    clearInterval(ticker);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: "Unknown error" }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    bar.style.width = "100%";
+
+    const total = res.headers.get("X-Backup-Total");
+    const succeeded = res.headers.get("X-Backup-Succeeded");
+    const failed = res.headers.get("X-Backup-Failed");
+    const runId = res.headers.get("X-Backup-Run-Id");
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cloudflare-zones-${runId}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    status.textContent = "Download started";
+    bar.style.background = (failed && Number(failed) > 0) ? "#f59e0b" : "#10b981";
+    summaryEl.innerHTML = `
+      <div style="padding: 10px 12px; background: ${(failed && Number(failed) > 0) ? "#fef3c7" : "#d1fae5"}; border-radius: 6px;">
+        <strong>Run ID:</strong> ${escHtml(runId || "")}<br>
+        <strong>Result:</strong> ${succeeded || 0} succeeded, ${failed || 0} failed (of ${total || 0})
+      </div>
+    `;
+  } catch (err) {
+    clearInterval(ticker);
+    bar.style.background = "#ef4444";
+    bar.style.width = "100%";
+    status.textContent = "ZIP download failed";
+    summaryEl.innerHTML = `<div style="color:#b91c1c;">${escHtml(err.message)}</div>`;
+  }
+}
+
+document.getElementById("zip-close-btn").addEventListener("click", () => {
+  document.getElementById("zip-modal").classList.add("hidden");
+});
+document.getElementById("zip-modal").addEventListener("click", (e) => {
+  if (e.target.id === "zip-modal") {
+    document.getElementById("zip-modal").classList.add("hidden");
+  }
 });
 
 // --- Last Backup Details Modal ---
