@@ -1349,16 +1349,28 @@ function renderAuditEntries(entries) {
     const actorType = actor.type ? `<span class="audit-actor-type">${escHtml(actor.type)}</span>` : "";
     const actorIp = actor.ip ? ` · ${escHtml(actor.ip)}` : "";
 
+    // Cloudflare returns both string (oldValue/newValue) and JSON
+    // (oldValueJson/newValueJson) variants. Many entries leave the strings
+    // empty and put the real payload in the *Json fields, so prefer JSON when
+    // it's non-empty and fall back to the string form otherwise.
+    const isMeaningful = (v) => {
+      if (v === undefined || v === null || v === "") return false;
+      if (typeof v === "object" && Object.keys(v).length === 0) return false;
+      return true;
+    };
+    const oldVal = isMeaningful(e.oldValueJson) ? e.oldValueJson
+      : isMeaningful(e.oldValue) ? e.oldValue : null;
+    const newVal = isMeaningful(e.newValueJson) ? e.newValueJson
+      : isMeaningful(e.newValue) ? e.newValue : null;
+    const meta = isMeaningful(e.metadata) ? e.metadata : null;
+
     let details = "";
-    const hasOld = e.oldValue !== undefined && e.oldValue !== null && e.oldValue !== "";
-    const hasNew = e.newValue !== undefined && e.newValue !== null && e.newValue !== "";
-    const hasMeta = e.metadata && Object.keys(e.metadata).length > 0;
-    if (hasOld || hasNew || hasMeta) {
+    if (oldVal !== null || newVal !== null || meta !== null) {
       const blob = JSON.stringify(
         {
-          ...(hasOld ? { oldValue: e.oldValue } : {}),
-          ...(hasNew ? { newValue: e.newValue } : {}),
-          ...(hasMeta ? { metadata: e.metadata } : {}),
+          ...(oldVal !== null ? { oldValue: oldVal } : {}),
+          ...(newVal !== null ? { newValue: newVal } : {}),
+          ...(meta !== null ? { metadata: meta } : {}),
         },
         null,
         2
