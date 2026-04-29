@@ -35,7 +35,6 @@ Options:
 | `--days <n>` | Analysis period in days | 30 |
 | `--enterprise-slots <n>` | Number of enterprise slots (auto-detected if omitted) | auto |
 | `--json` | Output as JSON | off |
-| `--backup` | Back up DNS zone files for all zones to Azure Blob Storage (see [DNS Zone Backups](#dns-zone-backups)) | off |
 
 ### Web Dashboard
 
@@ -54,7 +53,7 @@ Features:
 - Search and sort (by name, requests, or bandwidth)
 - Pending changes panel with estimated savings
 - Live progress bar during initial data load
-- **Backup Zones to Azure** split-button — snapshot all DNS zone files to Azure Blob Storage, download all zones as a single ZIP, or view the last backup's details (see [DNS Zone Backups](#dns-zone-backups))
+- **Download Zone Backups (.zip)** button — fetches every zone's DNS records as a BIND-format file and downloads them all as a single zip (see [DNS Zone Backups](#dns-zone-backups))
 
 ## How It Works
 
@@ -112,60 +111,29 @@ Click a card to see the full recommendation list with rationale ("why this matte
 
 ## DNS Zone Backups
 
-The app can export every Cloudflare zone's DNS records as a BIND-format zone file and upload them to Azure Blob Storage for disaster recovery and audit history. Each run writes to a date-stamped folder (no overwrites), so you can restore any prior snapshot.
+The dashboard's **Download Zone Backups (.zip)** button fetches every zone's DNS records via Cloudflare's `dns_records/export` endpoint and packages them into a single ZIP file that downloads to your browser. No external storage required — just `CLOUDFLARE_API_TOKEN` with `Zone:DNS:Read` added.
 
-### One-time setup
+### Setup
 
-1. **Create an Azure Storage Account** (any region, any redundancy — `Standard_LRS` is cheapest and fine for backups). In the Portal: *Storage accounts → Create*.
-2. **Create a private container** in the storage account (or let the app auto-create the default `cloudflare-zone-backups` on first run). Make sure public access is set to **None**.
-3. **Get the connection string**: Storage Account → *Security + networking → Access keys → Show → key1 → Connection string*.
-4. **Add credentials to `.env`**:
-   ```
-   AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net
-   AZURE_STORAGE_CONTAINER=cloudflare-zone-backups
-   ```
-5. **(Optional) Add `AZURE_SUBSCRIPTION_ID` and `AZURE_RESOURCE_GROUP`** to `.env`. With these set, the **View in Azure Portal** link on the backup success badge deep-links straight to your container. Without them, the link still works but lands on the portal's generic Storage accounts browse page.
-6. **Add `Zone:DNS:Read`** to your Cloudflare API token (https://dash.cloudflare.com/profile/api-tokens). The existing token can be edited in place.
+1. Edit your Cloudflare API token at https://dash.cloudflare.com/profile/api-tokens and add **Zone → DNS → Read**.
+2. Click the button. For ~150 zones the download is around 150 KB and takes ~10 seconds.
 
-### Running a backup
-
-The **Backup Zones to Azure** split-button in the dashboard offers three options via the chevron menu:
-
-- **Back up now** — kicks off the same Azure-backed backup as the CLI (`node src/index.js --backup`). Live progress modal, ends with a summary card.
-- **Download all as .zip** — assembles every zone's BIND file into a single ZIP that downloads to your browser. No Azure required (the endpoint only needs `CLOUDFLARE_API_TOKEN` with `Zone:DNS:Read`). The zip contains a date-stamped folder with one `<domain>.zone` file per zone plus a `manifest.json`. Useful for ad-hoc snapshots or for users who don't have Azure configured.
-- **Last Backup Details** — shows the run metadata from the most recent Azure backup, with a copy-to-clipboard summary.
-
-The Azure CLI flag is unchanged:
-
-```bash
-node src/index.js --backup
-```
-
-### Scheduled backups
-
-A GitHub Actions workflow at `.github/workflows/scheduled-backup.yml` runs the CLI backup on a weekly schedule (Sundays at 07:00 UTC by default — adjust the `cron` line to suit). It reuses the `production` environment, so make sure these secrets are configured there:
-
-- `CLOUDFLARE_API_TOKEN` (with `Zone:DNS:Read`)
-- `AZURE_STORAGE_CONNECTION_STRING`
-- `AZURE_STORAGE_CONTAINER` *(optional, as a variable not a secret; defaults to `cloudflare-zone-backups`)*
-
-You can also trigger a run on demand via the **Run workflow** button on the Actions tab. GitHub emails the repo's failure-notification recipients on failed runs.
-
-### What gets stored
+### What's in the ZIP
 
 ```
-<container>/2026-04-26T14-30-00Z/
-  example.com.zone
-  foo.com.zone
-  ...
-  manifest.json     # run metadata (timestamp, per-zone status, errors)
+cloudflare-zones-2026-04-26T14-30-00Z.zip
+└── 2026-04-26T14-30-00Z/
+    ├── example.com.zone
+    ├── foo.com.zone
+    ├── ...
+    └── manifest.json          # run metadata (timestamp, per-zone status, errors)
 ```
 
-Each `.zone` file is a standard BIND-format DNS zone file (importable back into Cloudflare or any other DNS provider).
+Each `.zone` file is standard BIND format (importable back into Cloudflare or any other DNS provider). The `manifest.json` records which zones succeeded or failed and any per-zone error messages.
 
-### Storage tier
+### Scheduling
 
-New blobs are written using the storage account's default access tier (typically Hot). For cost savings on long-term retention, configure an Azure Storage **Lifecycle Management** rule to move blobs older than N days to Cool/Cold/Archive. Connection-string auth doesn't restrict this — it's just an Azure-side policy.
+This is an on-demand feature. To run on a schedule, drive it from a cron-equivalent (e.g. a GitHub Actions workflow with `schedule:` trigger that `curl`s the endpoint and pipes to a file, or a host-level cron that hits `/api/backup-zip` and stashes the result wherever you keep backups).
 
 ## Project Structure
 
@@ -175,7 +143,7 @@ src/
   server.js       # Express server for web dashboard
   cloudflare.js   # Cloudflare API client (REST + GraphQL)
   analyzer.js     # Recommendation engine with traffic + feature heuristics
-  backup.js       # DNS zone backup to Azure Blob Storage
+  backup.js       # Zone backup ZIP builder (download-only, no external deps)
   formatter.js    # CLI table output
   public/
     index.html    # Web dashboard (vanilla HTML/CSS/JS)

@@ -285,15 +285,7 @@
   </span>
   <span class="toolbar-spacer"></span>
   <button id="btn-export-all">Export All</button>
-  <span class="split-button" id="backup-split">
-    <button id="btn-backup" class="split-main">Backup Zones to Azure</button>
-    <button id="btn-backup-toggle" class="split-toggle" aria-haspopup="menu" aria-expanded="false" title="More backup options">&#x25BE;</button>
-    <div class="split-menu hidden" id="backup-menu" role="menu">
-      <button type="button" id="menu-backup-now" role="menuitem">Back up now</button>
-      <button type="button" id="menu-backup-zip" role="menuitem">Download all as .zip</button>
-      <button type="button" id="menu-backup-last" role="menuitem">Last Backup Details</button>
-    </div>
-  </span>
+  <button id="btn-backup-zip" title="Download every zone's BIND file as a single .zip">Download Zone Backups (.zip)</button>
   <button id="btn-refresh" class="primary">Refresh Data</button>
   <button id="btn-reset">Reset Changes</button>
 </div>
@@ -359,40 +351,6 @@
     <div class="drawer-status">Loading…</div>
   </div>
 </aside>
-
-<div id="backup-modal" class="modal-overlay hidden">
-  <div class="modal" style="width: 560px;">
-    <div class="modal-header">
-      <h2>Backup Zones to Azure</h2>
-      <button class="modal-close" id="backup-close-btn">&times;</button>
-    </div>
-    <div class="modal-body">
-      <div id="backup-status" style="font-size: 14px; color: #555; margin-bottom: 12px;">Starting backup...</div>
-      <div class="bar-container" style="width: 100%; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; margin-bottom: 12px;">
-        <div id="backup-bar" style="height: 100%; background: #2563eb; border-radius: 4px; transition: width 0.2s; width: 0%;"></div>
-      </div>
-      <div id="backup-counts" style="font-size: 13px; color: #666; margin-bottom: 12px;"></div>
-      <div id="backup-log" style="font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px 10px; max-height: 280px; overflow-y: auto;"></div>
-      <div id="backup-summary" style="margin-top: 14px; font-size: 14px;"></div>
-    </div>
-  </div>
-</div>
-
-<div id="last-backup-modal" class="modal-overlay hidden">
-  <div class="modal" style="width: 520px;">
-    <div class="modal-header">
-      <h2>Last Backup Details</h2>
-      <button class="modal-close" id="last-backup-close-btn">&times;</button>
-    </div>
-    <div class="modal-body">
-      <div id="last-backup-content" style="font-size: 14px;">Loading...</div>
-      <div style="margin-top: 14px; display: flex; gap: 8px; align-items: center;">
-        <button type="button" id="btn-copy-last-backup" style="padding: 6px 14px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 13px; background: #fff; cursor: pointer;">Copy to Clipboard</button>
-        <span id="copy-status" style="font-size: 12px; color: #16a34a;"></span>
-      </div>
-    </div>
-  </div>
-</div>
 
 <div id="zip-modal" class="modal-overlay hidden">
   <div class="modal" style="width: 480px;">
@@ -688,19 +646,6 @@ function severityToDot(label) {
   return "dot-grey";
 }
 
-// Render an Azure Portal link for a backup summary, if the server provided one.
-// portalUrl is computed server-side; if null (no AZURE_STORAGE_CONNECTION_STRING),
-// we render nothing. The link opens in a new tab.
-function renderPortalLink(summary) {
-  if (!summary || !summary.portalUrl) return "";
-  return `<div style="margin-top: 8px; font-size: 13px;">
-    <a href="${escHtml(summary.portalUrl)}" target="_blank" rel="noopener noreferrer"
-       style="color: #2563eb; text-decoration: none; font-weight: 500;">
-      View in Azure Portal &rarr;
-    </a>
-  </div>`;
-}
-
 // --- Drag & Drop ---
 document.querySelectorAll(".plan-column").forEach(col => {
   col.addEventListener("dragover", (e) => { e.preventDefault(); col.classList.add("drag-over"); });
@@ -883,146 +828,8 @@ document.getElementById("btn-clear-pending").addEventListener("click", () => {
   renderPending();
 });
 
-// --- Backup Modal ---
-let backupEventSource = null;
-
-function openBackupModal() {
-  document.getElementById("backup-modal").classList.remove("hidden");
-  document.getElementById("backup-status").textContent = "Connecting to Azure...";
-  document.getElementById("backup-bar").style.width = "0%";
-  document.getElementById("backup-counts").textContent = "";
-  document.getElementById("backup-log").innerHTML = "";
-  document.getElementById("backup-summary").innerHTML = "";
-  startBackup();
-}
-
-function closeBackupModal() {
-  if (backupEventSource) {
-    backupEventSource.close();
-    backupEventSource = null;
-  }
-  document.getElementById("backup-modal").classList.add("hidden");
-}
-
-function appendBackupLog(line, color) {
-  const log = document.getElementById("backup-log");
-  const div = document.createElement("div");
-  if (color) div.style.color = color;
-  div.textContent = line;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-}
-
-function startBackup() {
-  let succeeded = 0;
-  let failed = 0;
-  let total = 0;
-
-  backupEventSource = new EventSource("/api/backup");
-
-  backupEventSource.addEventListener("progress", (e) => {
-    const evt = JSON.parse(e.data);
-    if (evt.phase === "start") {
-      total = evt.total;
-      document.getElementById("backup-status").textContent =
-        `Backing up ${total} zone(s) — run ${evt.runId}`;
-      appendBackupLog(`Run started: ${evt.runId}`);
-    } else if (evt.phase === "zone") {
-      if (evt.status === "ok") {
-        succeeded++;
-        appendBackupLog(`[${evt.current}/${evt.total}] ${evt.domain} — ok`);
-      } else {
-        failed++;
-        appendBackupLog(`[${evt.current}/${evt.total}] ${evt.domain} — FAILED: ${evt.error}`, "#b91c1c");
-      }
-      const pct = Math.round((evt.current / evt.total) * 100);
-      document.getElementById("backup-bar").style.width = pct + "%";
-      document.getElementById("backup-counts").textContent =
-        `${evt.current}/${evt.total} done — ${succeeded} ok, ${failed} failed`;
-    } else if (evt.phase === "manifest") {
-      document.getElementById("backup-status").textContent = "Uploading manifest...";
-      appendBackupLog("Uploading manifest.json");
-    }
-  });
-
-  backupEventSource.addEventListener("done", (e) => {
-    const summary = JSON.parse(e.data);
-    backupEventSource.close();
-    backupEventSource = null;
-
-    document.getElementById("backup-status").textContent = "Backup complete";
-    document.getElementById("backup-bar").style.width = "100%";
-    document.getElementById("backup-bar").style.background = summary.failed > 0 ? "#f59e0b" : "#10b981";
-
-    const summaryEl = document.getElementById("backup-summary");
-    summaryEl.innerHTML = `
-      <div style="padding: 10px 12px; background: ${summary.failed > 0 ? "#fef3c7" : "#d1fae5"}; border-radius: 6px;">
-        <strong>Run ID:</strong> ${escHtml(summary.runId || "")}<br>
-        <strong>Container:</strong> ${escHtml(summary.container || "")}<br>
-        <strong>Result:</strong> ${summary.succeeded || 0} succeeded, ${summary.failed || 0} failed (of ${summary.total || 0})
-        ${renderPortalLink(summary)}
-      </div>
-    `;
-  });
-
-  backupEventSource.addEventListener("error", (e) => {
-    let msg = "Connection lost.";
-    try {
-      if (e.data) msg = JSON.parse(e.data).message || msg;
-    } catch {}
-    document.getElementById("backup-status").textContent = "Backup failed";
-    appendBackupLog(`ERROR: ${msg}`, "#b91c1c");
-    if (backupEventSource) {
-      backupEventSource.close();
-      backupEventSource = null;
-    }
-  });
-}
-
-document.getElementById("btn-backup").addEventListener("click", openBackupModal);
-document.getElementById("backup-close-btn").addEventListener("click", closeBackupModal);
-document.getElementById("backup-modal").addEventListener("click", (e) => {
-  if (e.target.id === "backup-modal") closeBackupModal();
-});
-
-// --- Backup Split-Button Dropdown ---
-const backupMenu = document.getElementById("backup-menu");
-const backupToggle = document.getElementById("btn-backup-toggle");
-
-function setBackupMenuOpen(open) {
-  backupMenu.classList.toggle("hidden", !open);
-  backupToggle.setAttribute("aria-expanded", open ? "true" : "false");
-}
-
-backupToggle.addEventListener("click", (e) => {
-  e.stopPropagation();
-  setBackupMenuOpen(backupMenu.classList.contains("hidden"));
-});
-
-document.addEventListener("click", (e) => {
-  if (!document.getElementById("backup-split").contains(e.target)) {
-    setBackupMenuOpen(false);
-  }
-});
-
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") setBackupMenuOpen(false);
-});
-
-document.getElementById("menu-backup-now").addEventListener("click", () => {
-  setBackupMenuOpen(false);
-  openBackupModal();
-});
-
-document.getElementById("menu-backup-zip").addEventListener("click", () => {
-  setBackupMenuOpen(false);
-  triggerZipDownload();
-});
-
-document.getElementById("menu-backup-last").addEventListener("click", () => {
-  setBackupMenuOpen(false);
-  openLastBackupModal();
-});
+// --- Zone backup ZIP download ---
+document.getElementById("btn-backup-zip").addEventListener("click", () => triggerZipDownload());
 
 // --- ZIP Download Modal ---
 // Hits /api/backup-zip via fetch (so we can read the X-Backup-* response
@@ -1096,91 +903,6 @@ document.getElementById("zip-close-btn").addEventListener("click", () => {
 document.getElementById("zip-modal").addEventListener("click", (e) => {
   if (e.target.id === "zip-modal") {
     document.getElementById("zip-modal").classList.add("hidden");
-  }
-});
-
-// --- Last Backup Details Modal ---
-let currentLastBackup = null;
-
-function formatLastBackupText(s) {
-  const lines = [
-    `Run ID:    ${s.runId || ""}`,
-    `Container: ${s.container || ""}`,
-    `Timestamp: ${s.timestamp || ""}`,
-    `Result:    ${s.succeeded || 0} succeeded, ${s.failed || 0} failed (of ${s.total || 0})`,
-  ];
-  if (Array.isArray(s.errors) && s.errors.length) {
-    lines.push("", "Errors:");
-    for (const err of s.errors) {
-      lines.push(`  - ${err.domain}: ${err.error}`);
-    }
-  }
-  return lines.join("\n");
-}
-
-function renderLastBackupContent(s) {
-  if (!s) {
-    return `<div style="padding: 12px; background: #f9fafb; border-radius: 6px; color: #666;">No backup has been recorded yet. Run a backup first.</div>`;
-  }
-  const bg = (s.failed || 0) > 0 ? "#fef3c7" : "#d1fae5";
-  let html = `
-    <div style="padding: 10px 12px; background: ${bg}; border-radius: 6px;">
-      <strong>Run ID:</strong> ${escHtml(s.runId || "")}<br>
-      <strong>Container:</strong> ${escHtml(s.container || "")}<br>
-      <strong>Timestamp:</strong> ${escHtml(s.timestamp || "")}<br>
-      <strong>Result:</strong> ${s.succeeded || 0} succeeded, ${s.failed || 0} failed (of ${s.total || 0})
-      ${renderPortalLink(s)}
-    </div>
-  `;
-  if (Array.isArray(s.errors) && s.errors.length) {
-    html += `<div style="margin-top: 12px; font-size: 13px;"><strong>Errors:</strong><ul style="margin: 6px 0 0 18px; color: #991b1b;">`;
-    for (const err of s.errors) {
-      html += `<li>${escHtml(err.domain)}: ${escHtml(err.error)}</li>`;
-    }
-    html += `</ul></div>`;
-  }
-  return html;
-}
-
-async function openLastBackupModal() {
-  const modal = document.getElementById("last-backup-modal");
-  const content = document.getElementById("last-backup-content");
-  document.getElementById("copy-status").textContent = "";
-  content.innerHTML = "Loading...";
-  modal.classList.remove("hidden");
-
-  try {
-    const res = await fetch("/api/last-backup");
-    const data = await res.json();
-    currentLastBackup = data.summary || null;
-    content.innerHTML = renderLastBackupContent(currentLastBackup);
-    document.getElementById("btn-copy-last-backup").disabled = !currentLastBackup;
-  } catch (err) {
-    currentLastBackup = null;
-    content.innerHTML = `<div style="color: #b91c1c;">Failed to load: ${escHtml(err.message)}</div>`;
-  }
-}
-
-function closeLastBackupModal() {
-  document.getElementById("last-backup-modal").classList.add("hidden");
-}
-
-document.getElementById("last-backup-close-btn").addEventListener("click", closeLastBackupModal);
-document.getElementById("last-backup-modal").addEventListener("click", (e) => {
-  if (e.target.id === "last-backup-modal") closeLastBackupModal();
-});
-
-document.getElementById("btn-copy-last-backup").addEventListener("click", async () => {
-  if (!currentLastBackup) return;
-  const text = formatLastBackupText(currentLastBackup);
-  const status = document.getElementById("copy-status");
-  try {
-    await navigator.clipboard.writeText(text);
-    status.textContent = "Copied!";
-    setTimeout(() => { status.textContent = ""; }, 2000);
-  } catch {
-    status.textContent = "Copy failed — your browser may block clipboard access.";
-    status.style.color = "#b91c1c";
   }
 });
 

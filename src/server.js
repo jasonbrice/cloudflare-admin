@@ -13,12 +13,11 @@ const {
   securityScoreLabel,
   performanceScoreLabel,
 } = require("./security-rules");
-const { backupAllZones, buildZoneBackupZip } = require("./backup");
+const { buildZoneBackupZip } = require("./backup");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CACHE_FILE = path.join(__dirname, "..", "data", "analysis-cache.json");
-const LAST_BACKUP_FILE = path.join(__dirname, "..", "data", "last-backup.json");
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -41,65 +40,6 @@ function saveCache(data) {
   const payload = { ...data, timestamp: new Date().toISOString() };
   fs.writeFileSync(CACHE_FILE, JSON.stringify(payload, null, 2));
   return payload.timestamp;
-}
-
-function loadLastBackup() {
-  try {
-    if (!fs.existsSync(LAST_BACKUP_FILE)) return null;
-    return JSON.parse(fs.readFileSync(LAST_BACKUP_FILE, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function saveLastBackup(summary) {
-  const dir = path.dirname(LAST_BACKUP_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const payload = {
-    ...summary,
-    timestamp: new Date().toISOString(),
-    portalUrl: buildPortalUrl(summary.container, summary.runId),
-  };
-  fs.writeFileSync(LAST_BACKUP_FILE, JSON.stringify(payload, null, 2));
-  return payload;
-}
-
-// Parse AccountName=foo from a connection string. Returns null if not found.
-function parseAccountName(connStr) {
-  if (!connStr) return null;
-  const match = connStr.match(/(?:^|;)AccountName=([^;]+)/i);
-  return match ? match[1] : null;
-}
-
-/**
- * Build an Azure Portal URL pointing at the backup location.
- *
- * If AZURE_SUBSCRIPTION_ID and AZURE_RESOURCE_GROUP are set, returns a deep
- * link directly to the container (the date-stamped folder appears in the
- * listing). Otherwise returns a link to the portal's Storage accounts browse
- * page so the user can pick the account manually. Returns null if we can't
- * even determine the account name.
- */
-function buildPortalUrl(container, _runId) {
-  const accountName = parseAccountName(process.env.AZURE_STORAGE_CONNECTION_STRING);
-  if (!accountName) return null;
-
-  const sub = process.env.AZURE_SUBSCRIPTION_ID;
-  const rg = process.env.AZURE_RESOURCE_GROUP;
-
-  if (sub && rg && container) {
-    const resourceId =
-      `/subscriptions/${sub}/resourceGroups/${rg}` +
-      `/providers/Microsoft.Storage/storageAccounts/${accountName}`;
-    return (
-      "https://portal.azure.com/#blade/Microsoft_Azure_Storage/ContainerMenuBlade/overview" +
-      `/storageAccountId/${encodeURIComponent(resourceId)}` +
-      `/path/${encodeURIComponent(container)}`
-    );
-  }
-
-  // Fallback: browse storage accounts (one extra click to find the account)
-  return "https://portal.azure.com/#blade/HubsExtension/BrowseResource/resourceType/Microsoft.Storage%2FStorageAccounts";
 }
 
 // --- Routes ---
@@ -231,50 +171,6 @@ app.get("/api/analyze", async (req, res) => {
   res.end();
 });
 
-// Stream zone backup progress via SSE
-app.get("/api/backup", async (_req, res) => {
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-  });
-
-  function send(event, data) {
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  }
-
-  try {
-    if (!process.env.AZURE_STORAGE_CONNECTION_STRING) {
-      send("error", {
-        message:
-          "AZURE_STORAGE_CONNECTION_STRING is not set on the server. Add it to .env and restart.",
-      });
-      res.end();
-      return;
-    }
-
-    const summary = await backupAllZones((evt) => {
-      // Forward each progress event from backup module to the client
-      if (evt.phase === "done") {
-        send("done", evt);
-      } else {
-        send("progress", evt);
-      }
-    });
-
-    // Persist the summary so "Last Backup Details" works across sessions/restarts
-    const persisted = saveLastBackup(summary);
-
-    // backupAllZones already emits a "done" via onProgress, but emit one more
-    // explicit done as a safety net in case the consumer missed it.
-    send("done", { phase: "done", ...persisted });
-  } catch (err) {
-    send("error", { message: err.message });
-  }
-
-  res.end();
-});
-
 // Download all zones' BIND files as a single ZIP. No external dependencies —
 // works against any Cloudflare account with DNS:Read on the token. Requested
 // directly via window.location for the standard browser download flow; the
@@ -351,17 +247,6 @@ app.get("/api/audit/:domain", async (req, res) => {
         : msg;
     res.status(500).json({ error: friendly });
   }
-});
-
-// Returns the most recent successful backup summary (or { summary: null })
-app.get("/api/last-backup", (_req, res) => {
-  const summary = loadLastBackup();
-  if (summary) {
-    // Recompute portalUrl on every read so env-var changes (subscription /
-    // resource group) are picked up without needing a fresh backup.
-    summary.portalUrl = buildPortalUrl(summary.container, summary.runId);
-  }
-  res.json({ summary });
 });
 
 app.listen(PORT, () => {
