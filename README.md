@@ -1,4 +1,4 @@
-# Cloudflare Domain Plan Analyzer
+# Cloudflare Domain Analyzer
 
 Analyzes traffic and feature usage across all your Cloudflare domains and recommends the right plan (Free, Pro, Business, or Enterprise) for each one. Includes a web dashboard with drag-and-drop plan reassignment.
 
